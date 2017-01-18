@@ -6,3 +6,8 @@ release
 ._*
 *~
 .DS_Store
+/sdk/
+/temp/
+
+build/**
+.gradle

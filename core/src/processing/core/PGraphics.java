@@ -3,7 +3,8 @@
 /*
   Part of the Processing project - http://processing.org
 
-  Copyright (c) 2004-10 Ben Fry and Casey Reas
+  Copyright (c) 2012-16 The Processing Foundation
+  Copyright (c) 2004-12 Ben Fry and Casey Reas
   Copyright (c) 2001-04 Massachusetts Institute of Technology
 
   This library is free software; you can redistribute it and/or
@@ -25,12 +26,18 @@ package processing.core;
 
 import java.util.HashMap;
 import java.util.WeakHashMap;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
+import processing.android.AppComponent;
 import processing.opengl.PGL;
 import processing.opengl.PShader;
-
-import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.view.SurfaceHolder;
 
 
 /**
@@ -128,10 +135,7 @@ public class PGraphics extends PImage implements PConstants {
   public int pixelCount;
 
   /// true if smoothing is enabled (read-only)
-  public boolean smooth = false;
-
-  /// the anti-aliasing level for renderers that support it
-  protected int quality;
+  public int smooth;
 
   // ........................................................
 
@@ -152,7 +156,7 @@ public class PGraphics extends PImage implements PConstants {
    * created any other way than size(). When this is set, the listeners
    * are also added to the sketch.
    */
-  protected boolean primarySurface;
+  protected boolean primaryGraphics;
 
   // ........................................................
 
@@ -473,16 +477,6 @@ public class PGraphics extends PImage implements PConstants {
 
   // ........................................................
 
-  /**
-   * Java AWT Image object associated with this renderer. For P2D and P3D,
-   * this will be associated with their MemoryImageSource. For PGraphicsJava2D,
-   * it will be the offscreen drawing buffer.
-   */
-  //public Image image;
-  public Bitmap bitmap;
-
-  // ........................................................
-
   // internal color for setting/calculating
   protected float calcR, calcG, calcB, calcA;
   protected int calcRi, calcGi, calcBi, calcAi;
@@ -670,12 +664,12 @@ public class PGraphics extends PImage implements PConstants {
    * else that goes along with that.
    */
   public void setPrimary(boolean primary) {  // ignore
-    this.primarySurface = primary;
+    this.primaryGraphics = primary;
 
     // base images must be opaque (for performance and general
     // headache reasons.. argh, a semi-transparent opengl surface?)
     // use createGraphics() if you want a transparent surface.
-    if (primarySurface) {
+    if (primaryGraphics) {
       format = RGB;
     }
   }
@@ -727,8 +721,13 @@ public class PGraphics extends PImage implements PConstants {
    * endRaw(), in order to shut things off.
    */
   public void dispose() {  // ignore
+    parent = null;
   }
 
+
+  public PSurface createSurface(AppComponent component, SurfaceHolder holder) {  // ignore
+    return null;
+  }
 
 
   //////////////////////////////////////////////////////////////
@@ -788,16 +787,16 @@ public class PGraphics extends PImage implements PConstants {
   /**
    * Some renderers have requirements re: when they are ready to draw.
    */
-  public boolean canDraw() {  // ignore
-    return true;
-  }
+//  public boolean canDraw() {  // ignore
+//    return true;
+//  }
 
 
   /**
    * Try to draw, or put a draw request on the queue.
    */
-  public void requestDraw() {  // ignore
-  }
+//  public void requestDraw() {  // ignore
+//  }
 
 
   /**
@@ -886,7 +885,7 @@ public class PGraphics extends PImage implements PConstants {
     // a gray background (when just a transparent surface or an empty pdf
     // is what's desired).
     // this background() call is for the Java 2D and OpenGL renderers.
-    if (primarySurface) {
+    if (primaryGraphics) {
       //System.out.println("main drawing surface bg " + getClass().getName());
       background(backgroundColor);
     }
@@ -945,12 +944,12 @@ public class PGraphics extends PImage implements PConstants {
     } else {
       noTint();
     }
-    if (smooth) {
-      smooth();
-    } else {
-      // Don't bother setting this, cuz it'll anger P3D.
-      noSmooth();
-    }
+//    if (smooth) {
+//      smooth();
+//    } else {
+//      // Don't bother setting this, cuz it'll anger P3D.
+//      noSmooth();
+//    }
     if (textFont != null) {
 //      System.out.println("  textFont in reapply is " + textFont);
       // textFont() resets the leading, so save it in case it's changed
@@ -1075,6 +1074,37 @@ public class PGraphics extends PImage implements PConstants {
       }
     }
   }
+
+
+  public void attribPosition(String name, float x, float y, float z) {
+    showMissingWarning("attrib");
+  }
+
+
+  public void attribNormal(String name, float nx, float ny, float nz) {
+    showMissingWarning("attrib");
+  }
+
+
+  public void attribColor(String name, int color) {
+    showMissingWarning("attrib");
+  }
+
+
+  public void attrib(String name, float... values) {
+    showMissingWarning("attrib");
+  }
+
+
+  public void attrib(String name, int... values) {
+    showMissingWarning("attrib");
+  }
+
+
+  public void attrib(String name, boolean... values) {
+    showMissingWarning("attrib");
+  }
+
 
   /**
    * Set texture mode to either to use coordinates based on the IMAGE
@@ -1471,29 +1501,120 @@ public class PGraphics extends PImage implements PConstants {
   // SHAPE CREATION
 
 
-  public PShape createShape(PShape source) {
-    showMissingWarning("createShape");
-    return null;
-  }
-
-
+  /**
+   * @webref shape
+   * @see PShape
+   * @see PShape#endShape()
+   * @see PApplet#loadShape(String)
+   */
   public PShape createShape() {
-    showMissingWarning("createShape");
-    return null;
+    // Defaults to GEOMETRY (rather than GROUP like the default constructor)
+    // because that's how people will use it within a sketch.
+    return createShape(PShape.GEOMETRY);
   }
 
 
+  // POINTS, LINES, TRIANGLES, TRIANGLE_FAN, TRIANGLE_STRIP, QUADS, QUAD_STRIP
   public PShape createShape(int type) {
-    showMissingWarning("createShape");
-    return null;
+    // If it's a PRIMITIVE, it needs the 'params' field anyway
+    if (type == PConstants.GROUP ||
+        type == PShape.PATH ||
+        type == PShape.GEOMETRY) {
+      return createShapeFamily(type);
+    }
+    final String msg =
+      "Only GROUP, PShape.PATH, and PShape.GEOMETRY work with createShape()";
+    throw new IllegalArgumentException(msg);
   }
 
 
+  /** Override this method to return an appropriate shape for your renderer */
+  protected PShape createShapeFamily(int type) {
+    return new PShape(this, type);
+//    showMethodWarning("createShape()");
+//    return null;
+  }
+
+
+  /**
+   * @param kind either POINT, LINE, TRIANGLE, QUAD, RECT, ELLIPSE, ARC, BOX, SPHERE
+   * @param p parameters that match the kind of shape
+   */
   public PShape createShape(int kind, float... p) {
-    showMissingWarning("createShape");
-    return null;
+    int len = p.length;
+
+    if (kind == POINT) {
+      if (is3D() && len != 2 && len != 3) {
+        throw new IllegalArgumentException("Use createShape(POINT, x, y) or createShape(POINT, x, y, z)");
+      } else if (len != 2) {
+        throw new IllegalArgumentException("Use createShape(POINT, x, y)");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == LINE) {
+      if (is3D() && len != 4 && len != 6) {
+        throw new IllegalArgumentException("Use createShape(LINE, x1, y1, x2, y2) or createShape(LINE, x1, y1, z1, x2, y2, z1)");
+      } else if (len != 4) {
+        throw new IllegalArgumentException("Use createShape(LINE, x1, y1, x2, y2)");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == TRIANGLE) {
+      if (len != 6) {
+        throw new IllegalArgumentException("Use createShape(TRIANGLE, x1, y1, x2, y2, x3, y3)");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == QUAD) {
+      if (len != 8) {
+        throw new IllegalArgumentException("Use createShape(QUAD, x1, y1, x2, y2, x3, y3, x4, y4)");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == RECT) {
+      if (len != 4 && len != 5 && len != 8 && len != 9) {
+        throw new IllegalArgumentException("Wrong number of parameters for createShape(RECT), see the reference");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == ELLIPSE) {
+      if (len != 4 && len != 5) {
+        throw new IllegalArgumentException("Use createShape(ELLIPSE, x, y, w, h) or createShape(ELLIPSE, x, y, w, h, mode)");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == ARC) {
+      if (len != 6 && len != 7) {
+        throw new IllegalArgumentException("Use createShape(ARC, x, y, w, h, start, stop)");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == BOX) {
+      if (!is3D()) {
+        throw new IllegalArgumentException("createShape(BOX) is not supported in 2D");
+      } else if (len != 1 && len != 3) {
+        throw new IllegalArgumentException("Use createShape(BOX, size) or createShape(BOX, width, height, depth)");
+      }
+      return createShapePrimitive(kind, p);
+
+    } else if (kind == SPHERE) {
+      if (!is3D()) {
+        throw new IllegalArgumentException("createShape(SPHERE) is not supported in 2D");
+      } else if (len != 1) {
+        throw new IllegalArgumentException("Use createShape(SPHERE, radius)");
+      }
+      return createShapePrimitive(kind, p);
+    }
+    throw new IllegalArgumentException("Unknown shape type passed to createShape()");
   }
 
+
+  /** Override this to have a custom shape object used by your renderer. */
+  protected PShape createShapePrimitive(int kind, float... p) {
+//    showMethodWarning("createShape()");
+//    return null;
+    return new PShape(this, kind, p);
+  }
 
 
   //////////////////////////////////////////////////////////////
@@ -2643,25 +2764,36 @@ public class PGraphics extends PImage implements PConstants {
   // SMOOTHING
 
 
-  /**
-   * If true in PImage, use bilinear interpolation for copy()
-   * operations. When inherited by PGraphics, also controls shapes.
-   */
-  public void smooth() {
-    smooth = true;
+  public void smooth() {  // ignore
+    smooth(1);
   }
 
-  public void smooth(int level) {
-    smooth = true;
+
+  public void smooth(int quality) {  // ignore
+    if (primaryGraphics) {
+      parent.smooth(quality);
+    } else {
+      // for createGraphics(), make sure beginDraw() not called yet
+      if (settingsInited) {
+        // ignore if it's just a repeat of the current state
+        if (this.smooth != quality) {
+          smoothWarning("smooth");
+        }
+      } else {
+        this.smooth = quality;
+      }
+    }
   }
 
-  /**
-   * Disable smoothing. See smooth().
-   */
-  public void noSmooth() {
-    smooth = false;
+
+  public void noSmooth() {  // ignore
+    smooth(0);
   }
 
+
+  private void smoothWarning(String method) {
+    PGraphics.showWarning("%s() can only be used before beginDraw()", method);
+  }
 
 
   //////////////////////////////////////////////////////////////
@@ -2965,10 +3097,47 @@ public class PGraphics extends PImage implements PConstants {
    * The leading will also be reset.
    */
   public void textFont(PFont which) {
-    if (which != null) {
-      textFont = which;
+    if (which == null) {
+      throw new RuntimeException(ERROR_TEXTFONT_NULL_PFONT);
+    }
+    textFontImpl(which, which.getDefaultSize());
+  }
+
+
+  /**
+   * Useful function to set the font and size at the same time.
+   */
+  public void textFont(PFont which, float size) {
+    if (which == null) {
+      throw new RuntimeException(ERROR_TEXTFONT_NULL_PFONT);
+    }
+    // https://github.com/processing/processing/issues/3110
+    if (size <= 0) {
+      // Using System.err instead of showWarning to avoid running out of
+      // memory with a bunch of textSize() variants (cause of this bug is
+      // usually something done with map() or in a loop).
+      System.err.println("textFont: ignoring size " + size + " px:" +
+                             "the text size must be larger than zero");
+      size = textSize;
+    }
+    textFontImpl(which, size);
+  }
+
+
+  /**
+   * Called from textFont. Check the validity of args and
+   * print possible errors to the user before calling this.
+   * Subclasses will want to override this one.
+   *
+   * @param which font to set, not null
+   * @param size size to set, greater than zero
+   */
+  protected void textFontImpl(PFont which, float size) {
+    textFont = which;
 //      if (hints[ENABLE_NATIVE_FONTS]) {
-//        which.findTypeface(name);
+//        //if (which.font == null) {
+//        which.findNative();
+//        //}
 //      }
       /*
       textFontNative = which.font;
@@ -2993,20 +3162,8 @@ public class PGraphics extends PImage implements PConstants {
         // float w = font.getStringBounds(text, g2.getFontRenderContext()).getWidth();
       }
       */
-      textSize(which.size);
 
-    } else {
-      throw new RuntimeException(ERROR_TEXTFONT_NULL_PFONT);
-    }
-  }
-
-
-  /**
-   * Useful function to set the font and size at the same time.
-   */
-  public void textFont(PFont which, float size) {
-    textFont(which);
-    textSize(size);
+    handleTextSize(size);
   }
 
 
@@ -3059,15 +3216,40 @@ public class PGraphics extends PImage implements PConstants {
    * Sets the text size, also resets the value for the leading.
    */
   public void textSize(float size) {
+    // https://github.com/processing/processing/issues/3110
+    if (size <= 0) {
+      // Using System.err instead of showWarning to avoid running out of
+      // memory with a bunch of textSize() variants (cause of this bug is
+      // usually something done with map() or in a loop).
+      System.err.println("textSize(" + size + ") ignored: " +
+                         "the text size must be larger than zero");
+      return;
+    }
     if (textFont == null) {
       defaultFontOrDeath("textSize", size);
     }
+    textSizeImpl(size);
+  }
 
+
+  /**
+   * Called from textSize() after validating size. Subclasses
+   * will want to override this one.
+   * @param size size of the text, greater than zero
+   */
+  protected void textSizeImpl(float size) {
+    handleTextSize(size);
+  }
+
+
+  /**
+   * Sets the actual size. Called from textSizeImpl and
+   * from textFontImpl after setting the font.
+   * @param size size of the text, greater than zero
+   */
+  protected void handleTextSize(float size) {
     textSize = size;
-//    PApplet.println("textSize textAscent -> " + textAscent());
-//    PApplet.println("textSize textDescent -> " + textDescent());
     textLeading = (textAscent() + textDescent()) * 1.275f;
-//    PApplet.println("textSize textLeading = " + textLeading);
   }
 
 
@@ -4073,6 +4255,8 @@ public class PGraphics extends PImage implements PConstants {
     ellipseMode(s.ellipseMode);
     shapeMode(s.shapeMode);
 
+    blendMode(s.blendMode);
+
     if (s.tint) {
       tint(s.tintColor);
     } else {
@@ -4150,6 +4334,8 @@ public class PGraphics extends PImage implements PConstants {
     s.rectMode = rectMode;
     s.ellipseMode = ellipseMode;
     s.shapeMode = shapeMode;
+
+    s.blendMode = blendMode;
 
     s.colorMode = colorMode;
     s.colorModeX = colorModeX;
@@ -5510,4 +5696,158 @@ public class PGraphics extends PImage implements PConstants {
   public boolean isGL() {
     return false;
   }
+
+
+  //////////////////////////////////////////////////////////////
+
+  // ASYNC IMAGE SAVING
+
+
+  @Override
+  public boolean save(String filename) { // ignore
+
+    if (hints[DISABLE_ASYNC_SAVEFRAME]) {
+      return super.save(filename);
+    }
+
+    if (asyncImageSaver == null) {
+      asyncImageSaver = new AsyncImageSaver();
+    }
+
+    if (!loaded) loadPixels();
+    PImage target = asyncImageSaver.getAvailableTarget(pixelWidth, pixelHeight,
+                                                       format);
+    if (target == null) return false;
+    int count = PApplet.min(pixels.length, target.pixels.length);
+    System.arraycopy(pixels, 0, target.pixels, 0, count);
+    asyncImageSaver.saveTargetAsync(this, target, filename);
+
+    return true;
+  }
+
+  protected void processImageBeforeAsyncSave(PImage image) { }
+
+
+  protected static AsyncImageSaver asyncImageSaver;
+
+  protected static class AsyncImageSaver {
+
+    static final int TARGET_COUNT =
+        Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+
+    BlockingQueue<PImage> targetPool = new ArrayBlockingQueue<>(TARGET_COUNT);
+    ExecutorService saveExecutor = Executors.newFixedThreadPool(TARGET_COUNT);
+
+    int targetsCreated = 0;
+
+
+    static final int TIME_AVG_FACTOR = 32;
+
+    volatile long avgNanos = 0;
+    long lastTime = 0;
+    int lastFrameCount = 0;
+
+
+    public AsyncImageSaver() { } // ignore
+
+
+    public void dispose() { // ignore
+      saveExecutor.shutdown();
+      try {
+        saveExecutor.awaitTermination(5000, TimeUnit.SECONDS);
+      } catch (InterruptedException e) { }
+    }
+
+
+    public boolean hasAvailableTarget() { // ignore
+      return targetsCreated < TARGET_COUNT || targetPool.isEmpty();
+    }
+
+
+    /**
+     * After taking a target, you must call saveTargetAsync() or
+     * returnUnusedTarget(), otherwise one thread won't be able to run
+     */
+    public PImage getAvailableTarget(int requestedWidth, int requestedHeight, // ignore
+                                     int format) {
+      try {
+        PImage target;
+        if (targetsCreated < TARGET_COUNT && targetPool.isEmpty()) {
+          target = new PImage(requestedWidth, requestedHeight);
+          targetsCreated++;
+        } else {
+          target = targetPool.take();
+          if (target.width != requestedWidth ||
+              target.height != requestedHeight) {
+            target.width = requestedWidth;
+            target.height = requestedHeight;
+            // TODO: this kills performance when saving different sizes
+            target.pixels = new int[requestedWidth * requestedHeight];
+          }
+        }
+        target.format = format;
+        return target;
+      } catch (InterruptedException e) {
+        return null;
+      }
+    }
+
+
+    public void returnUnusedTarget(PImage target) { // ignore
+      targetPool.offer(target);
+    }
+
+
+    public void saveTargetAsync(final PGraphics renderer, final PImage target, // ignore
+                                final String filename) {
+      target.parent = renderer.parent;
+
+      // if running every frame, smooth the framerate
+      if (target.parent.frameCount - 1 == lastFrameCount && TARGET_COUNT > 1) {
+
+        // count with one less thread to reduce jitter
+        // 2 cores - 1 save thread - no wait
+        // 4 cores - 3 save threads - wait 1/2 of save time
+        // 8 cores - 7 save threads - wait 1/6 of save time
+        long avgTimePerFrame = avgNanos / (Math.max(1, TARGET_COUNT - 1));
+        long now = System.nanoTime();
+        long delay = PApplet.round((lastTime + avgTimePerFrame - now) / 1e6f);
+        try {
+          if (delay > 0) Thread.sleep(delay);
+        } catch (InterruptedException e) { }
+      }
+
+      lastFrameCount = target.parent.frameCount;
+      lastTime = System.nanoTime();
+
+      try {
+        saveExecutor.submit(new Runnable() {
+          @Override
+          public void run() { // ignore
+            try {
+              long startTime = System.nanoTime();
+              renderer.processImageBeforeAsyncSave(target);
+              target.save(filename);
+              long saveNanos = System.nanoTime() - startTime;
+              synchronized (AsyncImageSaver.this) {
+                if (avgNanos == 0) {
+                  avgNanos = saveNanos;
+                } else if (saveNanos < avgNanos) {
+                  avgNanos = (avgNanos * (TIME_AVG_FACTOR - 1) + saveNanos) /
+                      (TIME_AVG_FACTOR);
+                } else {
+                  avgNanos = saveNanos;
+                }
+              }
+            } finally {
+              targetPool.offer(target);
+            }
+          }
+        });
+      } catch (RejectedExecutionException e) {
+        // the executor service was probably shut down, no more saving for us
+      }
+    }
+  }
+
 }

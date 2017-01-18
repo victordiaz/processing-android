@@ -3,7 +3,8 @@
 /*
  Part of the Processing project - http://processing.org
 
- Copyright (c) 2009-10 Ben Fry and Casey Reas
+ Copyright (c) 2012-16 The Processing Foundation
+ Copyright (c) 2009-12 Ben Fry and Casey Reas
 
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License version 2
@@ -23,21 +24,32 @@ package processing.mode.android;
 
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.io.Writer;
+//import java.io.Writer;
 import java.util.List;
-
 import processing.app.*;
+import processing.core.PApplet;
 import processing.mode.java.preproc.PdePreprocessor;
-import processing.mode.java.preproc.PreprocessorResult;
-import antlr.RecognitionException;
-import antlr.TokenStreamException;
+import processing.mode.java.preproc.SurfaceInfo;
 
 
 public class AndroidPreprocessor extends PdePreprocessor {
-  Sketch sketch;
-  String packageName;
+  protected Sketch sketch;
+  protected String packageName;
 
+  protected String smoothStatement;
+  protected String sketchQuality;
 
+  protected String kindStatement;
+  protected String sketchKind;  
+  
+
+  public static final String SMOOTH_REGEX =
+      "(?:^|\\s|;)smooth\\s*\\(\\s*([^\\s,]+)\\s*\\)\\s*\\;";
+
+  public AndroidPreprocessor(final String sketchName) {
+    super(sketchName);
+  } 
+  
   public AndroidPreprocessor(final Sketch sketch,
                              final String packageName) throws IOException {
     super(sketch.getName());
@@ -46,20 +58,63 @@ public class AndroidPreprocessor extends PdePreprocessor {
   }
 
 
-  public String[] initSketchSize(String code) throws SketchException {
-    String[] info = parseSketchSize(code, true);
-    if (info == null) {
+  public SurfaceInfo initSketchSize(String code) throws SketchException {
+    SurfaceInfo surfaceInfo = parseSketchSize(code, true);
+    if (surfaceInfo == null) {
       System.err.println("More about the size() command on Android can be");
       System.err.println("found here: http://wiki.processing.org/w/Android");
       throw new SketchException("Could not parse the size() command.");
     }
-    sizeStatement = info[0];
-    sketchWidth = info[1];
-    sketchHeight = info[2];
-    sketchRenderer = info[3];
+    /*
+    sizeStatement = surfaceInfo.getStatement();
+    sketchWidth = surfaceInfo.getWidth();
+    sketchHeight = surfaceInfo.getHeight();
+    sketchRenderer = surfaceInfo.getRenderer();*/
+    return surfaceInfo;
+  }
+
+
+  public String[] initSketchSmooth(String code) throws SketchException {
+    String[] info = parseSketchSmooth(code, true);
+    if (info == null) {
+      System.err.println("More about the smooth() command on Android can be");
+      System.err.println("found here: http://wiki.processing.org/w/Android");
+      throw new SketchException("Could not parse the smooth() command.");
+    }
+    smoothStatement = info[0];
+    sketchQuality = info[1];
     return info;
   }
 
+
+  static public String[] parseSketchSmooth(String code, boolean fussy) {
+    String[] matches = PApplet.match(scrubComments(code), SMOOTH_REGEX);
+
+    if (matches != null) {
+      boolean badSmooth = false;
+
+      if (PApplet.parseInt(matches[1], -1) == -1) {
+        badSmooth = true;
+      }
+
+      if (badSmooth && fussy) {
+        // found a reference to smooth, but it didn't seem to contain numbers
+        final String message =
+          "The smooth level of this applet could not automatically\n" +
+          "be determined from your code. Use only a numeric\n" +
+          "value (not variables) for the smooth() command.\n" +
+          "See the smooth() reference for an explanation.";
+        Messages.showWarning("Could not find smooth level", message, null);
+//        new Exception().printStackTrace(System.out);
+        return null;
+      }
+
+      return matches;
+    }
+    return new String[] { null, null };  // not an error, just empty
+  }
+
+  
   /*
   protected boolean parseSketchSize() {
     // This matches against any uses of the size() function, whether numbers
@@ -128,6 +183,7 @@ public class AndroidPreprocessor extends PdePreprocessor {
   */
 
 
+  /*
   public PreprocessorResult write(Writer out, String program, String[] codeFolderPackages)
   throws SketchException, RecognitionException, TokenStreamException {
     if (sizeStatement != null) {
@@ -139,6 +195,7 @@ public class AndroidPreprocessor extends PdePreprocessor {
     //program = program.replaceAll("import\\s+processing\\.opengl\\.\\S+;", "");
     return super.write(out, program, codeFolderPackages);
   }
+  */
 
 
   @Override
@@ -151,7 +208,7 @@ public class AndroidPreprocessor extends PdePreprocessor {
     return 2 + super.writeImports(out, programImports, codeFolderImports);
   }
 
-
+/*
   protected void writeFooter(PrintWriter out, String className) {
     if (mode == Mode.STATIC) {
       // close off draw() definition
@@ -161,22 +218,26 @@ public class AndroidPreprocessor extends PdePreprocessor {
 
     if ((mode == Mode.STATIC) || (mode == Mode.ACTIVE)) {
       out.println();
-      
-      if (sketchWidth != null) {
-        out.println(indent + "public int sketchWidth() { return " + sketchWidth + "; }");
+
+      if (sizeInfo.getWidth() != null) {
+        out.println(indent + "public int sketchWidth() { return " + sizeInfo.getWidth() + "; }");
       }
-      if (sketchHeight != null) {
-        out.println(indent + "public int sketchHeight() { return " + sketchHeight + "; }");
+      if (sizeInfo.getHeight() != null) {
+        out.println(indent + "public int sketchHeight() { return " + sizeInfo.getHeight() + "; }");
       }
-      if (sketchRenderer != null) {
-        out.println(indent + "public String sketchRenderer() { return " + sketchRenderer + "; }");
+      if (sizeInfo.getRenderer() != null) {
+        out.println(indent + "public String sketchRenderer() { return " + sizeInfo.getRenderer() + "; }");
+      }
+
+      if (sketchQuality != null) {
+        out.println(indent + "public int sketchQuality() { return " + sketchQuality + "; }");
       }
 
       // close off the class definition
       out.println("}");
     }
   }
-
+*/
 
   // As of revision 0215 (2.0b7-ish), the default imports are now identical
   // between desktop and Android (to avoid unintended incompatibilities).
@@ -201,7 +262,7 @@ public class AndroidPreprocessor extends PdePreprocessor {
 
     // The initial values are stored in here for the day when Android
     // is broken out as a separate mode.
-    
+
     // In the future, this may include standard classes for phone or
     // accelerometer access within the Android APIs. This is currently living
     // in code rather than preferences.txt because Android mode needs to
@@ -220,5 +281,25 @@ public class AndroidPreprocessor extends PdePreprocessor {
 
     return androidImports;
   }
+  */
+  
+  // No need for it now
+  /*
+  public String[] getDefaultImports() {
+//    String[] defs = super.getDefaultImports();    
+//    return defs;
+    return new String[] {
+        "java.util.HashMap",
+        "java.util.ArrayList",
+        "java.io.File",
+        "java.io.BufferedReader",
+        "java.io.PrintWriter",
+        "java.io.InputStream",
+        "java.io.OutputStream",
+        "java.io.IOException",
+        "android.app.Activity",
+        "android.app.Fragment"
+      };    
+  } 
   */
 }

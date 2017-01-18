@@ -1,3 +1,25 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+  Part of the Processing project - http://processing.org
+
+  Copyright (c) 2013-16 The Processing Foundation
+
+  This library is free software; you can redistribute it and/or
+  modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation, version 2.
+
+  This library is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty
+  of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  See the GNU Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General
+  Public License along with this library; if not, write to the
+  Free Software Foundation, Inc., 59 Temple Place, Suite 330,
+  Boston, MA  02111-1307  USA
+*/
+
 package processing.data;
 
 import java.util.Arrays;
@@ -28,12 +50,14 @@ public class FloatList implements Iterable<Float> {
     data = new float[10];
   }
 
+
   /**
    * @nowebref
    */
   public FloatList(int length) {
     data = new float[length];
   }
+
 
   /**
    * @nowebref
@@ -44,13 +68,49 @@ public class FloatList implements Iterable<Float> {
     System.arraycopy(list, 0, data, 0, count);
   }
 
+
   /**
+   * Construct an FloatList from an iterable pile of objects.
+   * For instance, a float array, an array of strings, who knows).
+   * Un-parseable or null values will be set to NaN.
    * @nowebref
    */
-  public FloatList(Iterable<Float> iter) {
+  public FloatList(Iterable<Object> iter) {
     this(10);
-    for (float v : iter) {
-      append(v);
+    for (Object o : iter) {
+      if (o == null) {
+        append(Float.NaN);
+      } else if (o instanceof Number) {
+        append(((Number) o).floatValue());
+      } else {
+        append(PApplet.parseFloat(o.toString().trim()));
+      }
+    }
+    crop();
+  }
+
+
+  /**
+   * Construct an FloatList from a random pile of objects.
+   * Un-parseable or null values will be set to NaN.
+   */
+  public FloatList(Object... items) {
+    // nuts, no good way to pass missingValue to this fn (varargs must be last)
+    final float missingValue = Float.NaN;
+
+    count = items.length;
+    data = new float[count];
+    int index = 0;
+    for (Object o : items) {
+      float value = missingValue;
+      if (o != null) {
+        if (o instanceof Number) {
+          value = ((Number) o).floatValue();
+        } else {
+          value = PApplet.parseFloat(o.toString().trim(), missingValue);
+        }
+      }
+      data[index++] = value;
     }
   }
 
@@ -110,6 +170,9 @@ public class FloatList implements Iterable<Float> {
    * @brief Get an entry at a particular index
    */
   public float get(int index) {
+    if (index >= count) {
+      throw new ArrayIndexOutOfBoundsException(index);
+    }
     return data[index];
   }
 
@@ -131,6 +194,22 @@ public class FloatList implements Iterable<Float> {
       count = index+1;
     }
     data[index] = what;
+  }
+
+
+  /** Just an alias for append(), but matches pop() */
+  public void push(float value) {
+    append(value);
+  }
+
+
+  public float pop() {
+    if (count == 0) {
+      throw new RuntimeException("Can't call pop() on an empty list");
+    }
+    float value = get(count-1);
+    count--;
+    return value;
   }
 
 
@@ -266,6 +345,14 @@ public class FloatList implements Iterable<Float> {
   }
 
 
+  /** Add this value, but only if it's not already in the list. */
+  public void appendUnique(float value) {
+    if (!hasValue(value)) {
+      append(value);
+    }
+  }
+
+
 //  public void insert(int index, int value) {
 //    if (index+1 > count) {
 //      if (index+1 < data.length) {
@@ -296,8 +383,13 @@ public class FloatList implements Iterable<Float> {
 //  }
 
 
+  public void insert(int index, float value) {
+    insert(index, new float[] { value });
+  }
+
+
   // same as splice
-  public void insert(int index, int[] values) {
+  public void insert(int index, float[] values) {
     if (index < 0) {
       throw new IllegalArgumentException("insert() index cannot be negative: it was " + index);
     }
@@ -325,7 +417,7 @@ public class FloatList implements Iterable<Float> {
   }
 
 
-  public void insert(int index, IntList list) {
+  public void insert(int index, FloatList list) {
     insert(index, list.values());
   }
 
@@ -415,12 +507,23 @@ public class FloatList implements Iterable<Float> {
   }
 
 
+  private void boundsProblem(int index, String method) {
+    final String msg = String.format("The list size is %d. " +
+      "You cannot %s() to element %d.", count, method, index);
+    throw new ArrayIndexOutOfBoundsException(msg);
+  }
+
+
   /**
    * @webref floatlist:method
    * @brief Add to a value
    */
   public void add(int index, float amount) {
-    data[index] += amount;
+    if (index < count) {
+      data[index] += amount;
+    } else {
+      boundsProblem(index, "add");
+    }
   }
 
 
@@ -429,7 +532,11 @@ public class FloatList implements Iterable<Float> {
    * @brief Subtract from a value
    */
   public void sub(int index, float amount) {
-    data[index] -= amount;
+    if (index < count) {
+      data[index] -= amount;
+    } else {
+      boundsProblem(index, "sub");
+    }
   }
 
 
@@ -438,7 +545,11 @@ public class FloatList implements Iterable<Float> {
    * @brief Multiply a value
    */
   public void mult(int index, float amount) {
-    data[index] *= amount;
+    if (index < count) {
+      data[index] *= amount;
+    } else {
+      boundsProblem(index, "mult");
+    }
   }
 
 
@@ -447,7 +558,11 @@ public class FloatList implements Iterable<Float> {
    * @brief Divide a value
    */
   public void div(int index, float amount) {
-    data[index] /= amount;
+    if (index < count) {
+      data[index] /= amount;
+    } else {
+      boundsProblem(index, "div");
+    }
   }
 
 
@@ -563,7 +678,27 @@ public class FloatList implements Iterable<Float> {
     new Sort() {
       @Override
       public int size() {
-        return count;
+        // if empty, don't even mess with the NaN check, it'll AIOOBE
+        if (count == 0) {
+          return 0;
+        }
+        // move NaN values to the end of the list and don't sort them
+        int right = count - 1;
+        while (data[right] != data[right]) {
+          right--;
+          if (right == -1) {  // all values are NaN
+            return 0;
+          }
+        }
+        for (int i = right; i >= 0; --i) {
+          float v = data[i];
+          if (v != v) {
+            data[i] = data[right];
+            data[right] = v;
+            --right;
+          }
+        }
+        return right + 1;
       }
 
       @Override
@@ -601,7 +736,7 @@ public class FloatList implements Iterable<Float> {
 
   /**
    * @webref floatlist:method
-   * @brief Reverse sort, orders values by first digit
+   * @brief Reverse the order of the list elements
    */
   public void reverse() {
     int ii = count - 1;
@@ -669,6 +804,7 @@ public class FloatList implements Iterable<Float> {
 
 
   /** Implemented this way so that we can use a FloatList in a for loop. */
+  @Override
   public Iterator<Float> iterator() {
 //  }
 //
@@ -679,6 +815,7 @@ public class FloatList implements Iterable<Float> {
 
       public void remove() {
         FloatList.this.remove(index);
+        index--;
       }
 
       public Float next() {
@@ -704,7 +841,8 @@ public class FloatList implements Iterable<Float> {
 
 
   /**
-   * Copy as many values as possible into the specified array.
+   * Copy values into the specified array. If the specified array is null or
+   * not the same size, a new array will be allocated.
    * @param array
    */
   public float[] array(float[] array) {
@@ -762,17 +900,23 @@ public class FloatList implements Iterable<Float> {
   }
 
 
+  public void print() {
+    for (int i = 0; i < count; i++) {
+      System.out.format("[%d] %f%n", i, data[i]);
+    }
+  }
+
+
+  /**
+   * Return this dictionary as a String in JSON format.
+   */
+  public String toJSON() {
+    return "[ " + join(", ") + " ]";
+  }
+
+
   @Override
   public String toString() {
-    StringBuilder sb = new StringBuilder();
-    sb.append(getClass().getSimpleName() + " size=" + size() + " [ ");
-    for (int i = 0; i < size(); i++) {
-      if (i != 0) {
-        sb.append(", ");
-      }
-      sb.append(i + ": " + data[i]);
-    }
-    sb.append(" ]");
-    return sb.toString();
+    return getClass().getSimpleName() + " size=" + size() + " " + toJSON();
   }
 }

@@ -3,12 +3,12 @@
 /*
  Part of the Processing project - http://processing.org
 
+ Copyright (c) 2012-16 The Processing Foundation
  Copyright (c) 2008-12 Ben Fry and Casey Reas
 
  This program is free software; you can redistribute it and/or modify
- it under the terms of the GNU General Public License as published by
- the Free Software Foundation; either version 2 of the License, or
- (at your option) any later version.
+ it under the terms of the GNU General Public License version 2
+ as published by the Free Software Foundation.
 
  This program is distributed in the hope that it will be useful,
  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -29,10 +29,12 @@ import java.io.UnsupportedEncodingException;
 import java.util.Arrays;
 
 import processing.app.Base;
+import processing.app.Platform;
 import processing.app.Preferences;
 import processing.app.RunnerListener;
 import processing.app.Sketch;
 import processing.app.SketchException;
+import processing.app.Util;
 import processing.app.contrib.ModeContribution;
 
 /**
@@ -48,7 +50,12 @@ public class Commander implements RunnerListener {
   static final String runArg_EMULATOR = "e";
   static final String targetArg = "--target";
   static final String targetArg_DEBUG = "debug";
-  static final String targetArg_RELEASE = "release";
+  static final String targetArg_RELEASE = "release";  
+  static final String componentArg = "--component";
+  static final String targetArg_FRAGMENT = "fragment";
+  static final String targetArg_WALLPAPER = "wallpaper";
+  static final String targetArg_WATCHFACE = "watchface";
+  static final String targetArg_CARDBOARD = "cardboard";  
   static final String sketchArg = "--sketch=";
   static final String forceArg = "--force";
   static final String outputArg = "--output=";
@@ -73,6 +80,8 @@ public class Commander implements RunnerListener {
 
   private String outputPath = null;
   private File outputFolder = null;
+  
+  private int appComponent = AndroidBuild.FRAGMENT;
 
   private boolean force = false; // replace that no good output folder
   private String device = runArg_DEVICE;
@@ -82,9 +91,7 @@ public class Commander implements RunnerListener {
     // Do this early so that error messages go to the console
     Base.setCommandLine();
     // init the platform so that prefs and other native code is ready to go
-    Base.initPlatform();
-    // make sure a full JDK is installed
-    Base.initRequirements();
+    Platform.init();
 
     // launch command line handler
     Commander commander = new Commander(args);
@@ -118,6 +125,17 @@ public class Commander implements RunnerListener {
         // mode already set to HELP
       } else if (arg.startsWith(targetArg)) {
         target = extractValue(arg, targetArg, targetArg_DEBUG);
+      } else if (arg.startsWith(componentArg)) {
+        String compStr = extractValue(arg, targetArg, targetArg_FRAGMENT);
+        if (compStr.equals(targetArg_FRAGMENT)) {
+          appComponent = AndroidBuild.FRAGMENT;
+        } else if (compStr.equals(targetArg_WALLPAPER)) {
+          appComponent = AndroidBuild.WALLPAPER;
+        } else if (compStr.equals(targetArg_WATCHFACE)) {
+          appComponent = AndroidBuild.WATCHFACE;
+        } else if (compStr.equals(targetArg_CARDBOARD)) {
+          appComponent = AndroidBuild.CARDBOARD;
+        }
       } else if (arg.equals(buildArg)) {
         task = BUILD;
       } else if (arg.startsWith(runArg)) {
@@ -170,7 +188,7 @@ public class Commander implements RunnerListener {
     outputFolder = new File(outputPath);
     if (outputFolder.exists()) {
       if (force) {
-        Base.removeDir(outputFolder);
+        Util.removeDir(outputFolder);
       } else {
         complainAndQuit("The output folder already exists. " + "Use --force to remove it.", false);
       }
@@ -182,7 +200,7 @@ public class Commander implements RunnerListener {
     checkOrQuit(sketchPath != null, "No sketch path specified.", true);
     checkOrQuit(!outputPath.equals(sketchPath), "The sketch path and output path cannot be identical.", false);
 
-    androidMode = (AndroidMode) ModeContribution.load(null, Base.getContentFile("modes/android"),
+    androidMode = (AndroidMode) ModeContribution.load(null, Platform.getContentFile("modes/android"),
         "processing.mode.android.AndroidMode").getMode();
     androidMode.checkSDK(null);
   }
@@ -190,14 +208,15 @@ public class Commander implements RunnerListener {
   private void execute() {
     if (processing.app.Base.DEBUG) {
       systemOut.println("Build status: ");
-      systemOut.println("Sketch:   " + sketchPath);
-      systemOut.println("Output:   " + outputPath);
-      systemOut.println("Force:    " + force);
-      systemOut.println("Target:   " + target);
+      systemOut.println("Sketch:    " + sketchPath);
+      systemOut.println("Output:    " + outputPath);
+      systemOut.println("Force:     " + force);
+      systemOut.println("Target:    " + target);
+      systemOut.println("Component: " + appComponent);
       systemOut.println("==== Task ====");
-      systemOut.println("--build:  " + (task == BUILD));
-      systemOut.println("--run:    " + (task == RUN));
-      systemOut.println("--export: " + (task == EXPORT));
+      systemOut.println("--build:   " + (task == BUILD));
+      systemOut.println("--run:     " + (task == RUN));
+      systemOut.println("--export:  " + (task == EXPORT));
       systemOut.println();
     }
 
@@ -209,24 +228,25 @@ public class Commander implements RunnerListener {
     checkOrQuit(outputFolder.mkdirs(), "Could not create the output folder.", false);
 
     boolean success = false;
-
+    
     try {
+      boolean runOnEmu = runArg_EMULATOR.equals(device);
       sketch = new Sketch(pdePath, androidMode);
       if (task == BUILD || task == RUN) {
-        AndroidBuild build = new AndroidBuild(sketch, androidMode);
+        AndroidBuild build = new AndroidBuild(sketch, androidMode, appComponent, runOnEmu);
         build.build(target);
 
         if (task == RUN) {
           AndroidRunner runner = new AndroidRunner(build, this);
-          runner.launch(runArg_EMULATOR.equals(device) ?
-              Devices.getInstance().getEmulator() :
-              Devices.getInstance().getHardware());
+          runner.launch(runOnEmu ?
+              Devices.getInstance().getEmulator(build.isWear(), build.usesGPU()) :
+              Devices.getInstance().getHardware(), build.isWear());
         }
 
         success = true;
 
       } else if (task == EXPORT) {
-        AndroidBuild build = new AndroidBuild(sketch, androidMode);
+        AndroidBuild build = new AndroidBuild(sketch, androidMode, appComponent, false);
         build.exportProject();
 
         success = true;

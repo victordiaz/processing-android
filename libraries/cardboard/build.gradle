@@ -1,0 +1,55 @@
+buildscript {
+    repositories {
+        jcenter()
+    }
+    dependencies {
+        classpath group: 'commons-io', name: 'commons-io', version: '2.5'
+        classpath group: 'org.zeroturnaround', name: 'zt-zip', version: '1.9'
+    }
+}
+
+dependencies {
+    compile name: 'android'
+    compile name: 'core' 
+    compile name: 'gvr-base'
+    compile name: 'gvr-common'
+    compile name: 'gvr-audio'
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/']
+        }
+        resources {
+            srcDirs = ['src/']
+        }        
+    }
+}
+
+jar {    
+    manifest {
+        attributes(
+                "Manifest-Version": "1.0",
+                "Gradle-Version": "$gradle.gradleVersion"
+        )
+    }
+}
+
+clean.doFirst {
+    delete "library/cardboard.jar"
+}
+
+import groovy.util.AntBuilder
+import java.nio.file.Files
+import static java.nio.file.StandardCopyOption.*;
+
+task dist {
+    doLast {
+        // make copy of jar file to library folder
+        Files.copy(file("$buildDir/libs/cardboard.jar").toPath(),
+                   file("library/cardboard.jar").toPath(), REPLACE_EXISTING);             
+    }
+}
+
+dist.dependsOn build

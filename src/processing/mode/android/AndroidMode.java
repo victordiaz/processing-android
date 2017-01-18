@@ -3,6 +3,7 @@
 /*
  Part of the Processing project - http://processing.org
 
+ Copyright (c) 2012-16 The Processing Foundation
  Copyright (c) 2011-12 Ben Fry and Casey Reas
 
  This program is free software; you can redistribute it and/or modify
@@ -21,21 +22,44 @@
 
 package processing.mode.android;
 
-import processing.app.*;
+import processing.app.Base;
+import processing.app.Library;
+import processing.app.Messages;
+import processing.app.Platform;
+import processing.app.RunnerListener;
+import processing.app.Sketch;
+import processing.app.SketchException;
+import processing.app.ui.Editor;
+import processing.app.ui.EditorException;
+import processing.app.ui.EditorState;
+import processing.core.PApplet;
+import processing.mode.android.AndroidSDK.CancelException;
 import processing.mode.java.JavaMode;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 
 public class AndroidMode extends JavaMode {
   private AndroidSDK sdk;
   private File coreZipLocation;
   private AndroidRunner runner;
-
-  public static boolean sdkDownloadInProgress = false;
+  
+  private boolean showBluetoothDebugMessage = true;
+  private boolean showWallpaperSelectMessage = true;
+  
+  private boolean checkingSDK = false;
+  private boolean userCancelledSDKSearch = false;
 
   public AndroidMode(Base base, File folder) {
     super(base, folder);
@@ -43,13 +67,9 @@ public class AndroidMode extends JavaMode {
 
 
   @Override
-  public Editor createEditor(Base base, String path, EditorState state) {
-    try {
-      return new AndroidEditor(base, path, state, this);
-    } catch (Exception e) {
-      e.printStackTrace();
-    }
-    return null;
+  public Editor createEditor(Base base, String path,
+                             EditorState state) throws EditorException {
+    return new AndroidEditor(base, path, state, this);
   }
 
 
@@ -57,11 +77,11 @@ public class AndroidMode extends JavaMode {
   public String getTitle() {
     return "Android";
   }
-  
-  
+
+
   public File[] getKeywordFiles() {
-    return new File[] { 
-      Base.getContentFile("modes/java/keywords.txt") 
+    return new File[] {
+      Platform.getContentFile("modes/java/keywords.txt")
     };
   }
 
@@ -119,40 +139,95 @@ public class AndroidMode extends JavaMode {
   public void loadSDK() {
     try {
       sdk = AndroidSDK.load();
-    } catch (BadSDKException e) {
-      e.printStackTrace();
     } catch (IOException e) {
       e.printStackTrace();
     }
   }
 
-  public void checkSDK(Editor parent) {
-    if (sdk == null) {
+  
+  public void resetUserSelection() {
+    userCancelledSDKSearch = false;
+  }
+  
+  
+  public void checkSDK(Editor editor) {    
+    if (checkingSDK) {
+      // Some other thread has invoked SDK checking, so wait until the first one
+      // is done (it might involve downloading the SDK, etc).
+      while (checkingSDK) {
+        try {
+          Thread.sleep(10);
+        } catch (InterruptedException e) { 
+          return;
+        }      
+      }
+    }
+    if (userCancelledSDKSearch) return;
+    checkingSDK = true;
+    Throwable tr = null;
+    if (sdk == null) {      
       try {
         sdk = AndroidSDK.load();
-        // FIXME REVERT THIS STATEMENT AFTER TESTING (should be ==)
         if (sdk == null) {
-          sdk = AndroidSDK.locate(parent, this);
+          sdk = AndroidSDK.locate(editor, this);
         }
-      } catch (BadSDKException e) {
-        e.printStackTrace();
-      } catch (IOException e) {
-        e.printStackTrace();
+      } catch (CancelException cancel) {
+        userCancelledSDKSearch = true;
+        tr = cancel;
+      } catch (Exception other) {
+        tr = other;
       }
     }
     if (sdk == null) {
-      if(!sdkDownloadInProgress) {
-        Base.showWarning("It's gonna be a bad day",
-            "The Android SDK could not be loaded.\n" +
-                "Use of Android mode will be all but disabled.",
-            null);
-      }
+      Messages.showWarning("Bad news...",
+                           "The Android SDK could not be loaded.\n" +
+                           "The Android Mode will be disabled.", tr);
     }
+    checkingSDK = false;
   }
 
 
   public AndroidSDK getSDK() {
     return sdk;
+  }
+  
+  
+  @Override
+  public String getSearchPath() {
+    if (sdk == null) {
+        checkSDK(null);
+    }
+
+    if (sdk == null) {
+      Messages.log("Android SDK path couldn't be loaded.");
+      return "";
+    }
+
+    /*
+    Path path = Paths.get(sdk.getSdkFolder().getAbsolutePath(), 
+                          "platforms", AndroidBuild.target_platform, 
+                          "android.jar").toAbsolutePath();
+        
+//    String path = new File().getAbsolutePath(); 
+//        
+//        
+//        sdk.getSdkFolder().getAbsolutePath() + File.separator + 
+//                  "platforms" + File.separator + "android-";
+    String level = AndroidBuild.target_api_level;
+    String name = AndroidBuild.target_sdk_version;
+    String androidJarPath = path + level + File.separator + "android.jar";    
+    if (!new File(androidJarPath).exists()) {
+      // Try again using SDK name, I have seen the SDK stored as platforms/android-x.y.z
+      androidJarPath = path + name + File.separator + "android.jar";
+      if (!new File(androidJarPath).exists()) {
+        Messages.log("Android SDK path couldn't be loaded.");
+        return "";        
+      }
+    }
+    */
+    
+    String coreJarPath = new File(getFolder(), "android-core.zip").getAbsolutePath();
+    return sdk.getAndroidJarPath().getAbsolutePath() + File.pathSeparatorChar + coreJarPath;
   }
 
 
@@ -183,15 +258,18 @@ public class AndroidMode extends JavaMode {
 //      runtime.launch(false);
 //    }
 //  }
-  public void handleRunEmulator(Sketch sketch, RunnerListener listener) throws SketchException, IOException {
+  public void handleRunEmulator(Sketch sketch, AndroidEditor editor, 
+      RunnerListener listener, boolean resetManifest) throws SketchException, IOException {
     listener.startIndeterminate();
     listener.statusNotice("Starting build...");
-    AndroidBuild build = new AndroidBuild(sketch, this);
+    AndroidBuild build = new AndroidBuild(sketch, this, 
+        editor.getAppComponent(), true);
+    if (resetManifest) build.resetManifest();
 
     listener.statusNotice("Building Android project...");
     build.build("debug");
-
-    boolean avd = AVD.ensureProperAVD(sdk);
+        
+    boolean avd = AVD.ensureProperAVD(editor, this, sdk, build.isWear());
     if (!avd) {
       SketchException se =
         new SketchException("Could not create a virtual device for the emulator.");
@@ -201,37 +279,66 @@ public class AndroidMode extends JavaMode {
 
     listener.statusNotice("Running sketch on emulator...");
     runner = new AndroidRunner(build, listener);
-    runner.launch(Devices.getInstance().getEmulator());
+    runner.launch(Devices.getInstance().getEmulator(build.isWear(), build.usesGPU()), 
+        build.isWear());
   }
 
 
-  public void handleRunDevice(Sketch sketch, RunnerListener listener) throws SketchException, IOException {
-//    JavaBuild build = new JavaBuild(sketch);
-//    String appletClassName = build.build();
-//    if (appletClassName != null) {
-//      runtime = new Runner(build, listener);
-//      runtime.launch(true);
-//    }
-
-//    try {
-//      runSketchOnDevice(Environment.getInstance().getHardware(), "debug", this);
-//    } catch (final MonitorCanceled ok) {
-//      sketchStopped();
-//      statusNotice("Canceled.");
-//    }
+  public void handleRunDevice(Sketch sketch, AndroidEditor editor, 
+      RunnerListener listener, boolean resetManifest)
+    throws SketchException, IOException {    
+    
+    final Devices devices = Devices.getInstance();
+    java.util.List<Device> deviceList = devices.findMultiple(false);
+    if (deviceList.size() == 0) {
+      Messages.showWarning("No devices found!", 
+                           "Processing did not find any device where to run\n" +
+                           "your sketch on. Make sure that your handheld or\n" +
+                           "wearable is properly connected to the computer\n" +
+                           "and that USB or Bluetooth debugging is enabled.");
+      listener.statusError("No devices found.");
+      return;
+    }
+    
     listener.startIndeterminate();
     listener.statusNotice("Starting build...");
-    AndroidBuild build = new AndroidBuild(sketch, this);
+    AndroidBuild build = new AndroidBuild(sketch, this, 
+        editor.getAppComponent(), false);
+    if (resetManifest) build.resetManifest();
 
     listener.statusNotice("Building Android project...");
     build.build("debug");
 
     listener.statusNotice("Running sketch on device...");
     runner = new AndroidRunner(build, listener);
-    runner.launch(Devices.getInstance().getHardware());
+    runner.launch(Devices.getInstance().getHardware(), build.isWear());
+    
+    showPostBuildMessage(build.getAppComponent());
   }
 
-
+  public void showSelectComponentMessage(int appComp) {
+    if (showBluetoothDebugMessage && appComp == AndroidBuild.WATCHFACE) {
+      Messages.showMessage("Is Debugging over Bluetooth enabled?",
+                           "Processing will access the wearable through the handheld paired to it.\n" +
+                           "Your watch won't show up in the device list, select the paired handheld.\n" +
+                           "Make sure to enable \"Debugging over Bluetooth\" for this to work:\n" +
+                           "http://developer.android.com/training/wearables/apps/bt-debugging.html");   
+      showBluetoothDebugMessage = false;
+    }            
+  }
+  
+  public void showPostBuildMessage(int appComp) {
+    if (showWallpaperSelectMessage && appComp == AndroidBuild.WALLPAPER) {
+      Messages.showMessage("Now select the wallpaper...",
+                           "Processing built and installed your sketch\n" +
+                           "as a live wallpaper on the selected device.\n" +
+                           "You need to open the wallpaper selector\n" + 
+                           "in order to set it as the new background.");   
+      showWallpaperSelectMessage = false;
+    }    
+  }
+  
+  
   public void handleStop(RunnerListener listener) {
     listener.statusNotice("");
     listener.stopIndeterminate();
@@ -246,65 +353,80 @@ public class AndroidMode extends JavaMode {
     }
   }
 
-
-//  public void handleExport(Sketch sketch, )
-
-
-  /*
-  protected void buildReleaseForExport(Sketch sketch, String target) throws MonitorCanceled {
-//    final IndeterminateProgressMonitor monitor =
-//      new IndeterminateProgressMonitor(this,
-//                                       "Building and exporting...",
-//                                       "Creating project...");
-    try {
-      AndroidBuild build = new AndroidBuild(sketch, sdk);
-      File tempFolder = null;
-      try {
-        tempFolder = build.createProject(target, getCoreZipLocation());
-        if (tempFolder == null) {
-          return;
-        }
-      } catch (IOException e) {
-        e.printStackTrace();
-      } catch (SketchException se) {
-        se.printStackTrace();
+  public static void createFileFromTemplate(final File tmplFile, final File destFile) {
+    createFileFromTemplate(tmplFile, destFile, null);
+  }
+  
+  public static void createFileFromTemplate(final File tmplFile, final File destFile, 
+      final HashMap<String, String> replaceMap) {
+    PrintWriter pw = PApplet.createWriter(destFile);    
+    String lines[] = PApplet.loadStrings(tmplFile);
+    for (int i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf("@@") != -1 && replaceMap != null) {
+        StringBuilder sb = new StringBuilder(lines[i]);
+        int index = 0;
+        for (String key: replaceMap.keySet()) {
+          String val = replaceMap.get(key);
+          while ((index = sb.indexOf(key)) != -1) {
+            sb.replace(index, index + key.length(), val);
+          }          
+        }    
+        lines[i] = sb.toString();
       }
-      try {
-        if (monitor.isCanceled()) {
-          throw new MonitorCanceled();
-        }
-        monitor.setNote("Building release version...");
-//        if (!build.antBuild("release")) {
-//          return;
-//        }
-
-        if (monitor.isCanceled()) {
-          throw new MonitorCanceled();
-        }
-
-        // If things built successfully, copy the contents to the export folder
-        File exportFolder = build.createExportFolder();
-        if (exportFolder != null) {
-          Base.copyDir(tempFolder, exportFolder);
-          listener.statusNotice("Done with export.");
-          Base.openFolder(exportFolder);
-        } else {
-          listener.statusError("Could not copy files to export folder.");
-        }
-      } catch (IOException e) {
-        listener.statusError(e);
-
-      } finally {
-        build.cleanup();
-      }
-    } finally {
-      monitor.close();
+      // explicit newlines to avoid Windows CRLF
+      pw.print(lines[i] + "\n");
     }
-  }
+    pw.flush();
+    pw.close();    
+  }    
+  
+  public static void extractFolder(File file, File newPath, boolean setExec) throws IOException {
+    int BUFFER = 2048;
+    ZipFile zip = new ZipFile(file);
+    Enumeration<? extends ZipEntry> zipFileEntries = zip.entries();
 
+    // Process each entry
+    while (zipFileEntries.hasMoreElements()) {
+      // grab a zip file entry
+      ZipEntry entry = zipFileEntries.nextElement();
+      String currentEntry = entry.getName();
+      File destFile = new File(newPath, currentEntry);
+      //destFile = new File(newPath, destFile.getName());
+      File destinationParent = destFile.getParentFile();
 
-  @SuppressWarnings("serial")
-  private static class MonitorCanceled extends Exception {
+      // create the parent directory structure if needed
+      destinationParent.mkdirs();
+
+      String ext = PApplet.getExtension(currentEntry);
+      if (setExec && ext.equals("unknown")) {        
+        // On some OS X machines the android binaries loose their executable
+        // attribute, rendering the mode unusable
+        destFile.setExecutable(true);
+      }
+      
+      if (!entry.isDirectory()) {
+        // should preserve permissions
+        // https://bitbucket.org/atlassian/amps/pull-requests/21/amps-904-preserve-executable-file-status/diff
+        BufferedInputStream is = new BufferedInputStream(zip
+            .getInputStream(entry));
+        int currentByte;
+        // establish buffer for writing file
+        byte data[] = new byte[BUFFER];
+
+        // write the current file to disk
+        FileOutputStream fos = new FileOutputStream(destFile);
+        BufferedOutputStream dest = new BufferedOutputStream(fos,
+            BUFFER);
+
+        // read and write until last byte is encountered
+        while ((currentByte = is.read(data, 0, BUFFER)) != -1) {
+          dest.write(data, 0, currentByte);
+        }
+        dest.flush();
+        dest.close();
+        is.close();
+      }
+    }
+    zip.close();
   }
-  */
 }

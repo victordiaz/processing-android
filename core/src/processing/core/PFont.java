@@ -3,7 +3,8 @@
 /*
   Part of the Processing project - http://processing.org
 
-  Copyright (c) 2004-10 Ben Fry and Casey Reas
+  Copyright (c) 2012-16 The Processing Foundation
+  Copyright (c) 2004-12 Ben Fry and Casey Reas
   Copyright (c) 2001-04 Massachusetts Institute of Technology
 
   This library is free software; you can redistribute it and/or
@@ -414,6 +415,19 @@ public class PFont implements PConstants {
    */
   public int getSize() {
     return size;
+  }
+
+
+  /**
+   * Returns the size that will be used when textFont(font) is called.
+   */
+  public int getDefaultSize() {
+    return size;
+  }
+
+
+  public boolean isSmooth() {
+    return smooth;
   }
 
 

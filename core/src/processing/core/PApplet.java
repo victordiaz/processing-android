@@ -3,6 +3,7 @@
 /*
   Part of the Processing project - http://processing.org
 
+  Copyright (c) 2012-16 The Processing Foundation
   Copyright (c) 2004-12 Ben Fry and Casey Reas
   Copyright (c) 2001-04 Massachusetts Institute of Technology
 
@@ -26,52 +27,52 @@ package processing.core;
 import java.io.*;
 import java.lang.reflect.*;
 import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.text.NumberFormat;
 import java.util.*;
 import java.util.regex.*;
 import java.util.zip.*;
 
-import android.app.*;
 import android.content.*;
-import android.content.pm.ActivityInfo;
-import android.content.pm.ConfigurationInfo;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
-import android.content.res.Configuration;
 import android.graphics.*;
 import android.net.Uri;
-import android.opengl.GLSurfaceView;
 import android.os.Bundle;
-import android.os.Handler;
-import android.text.format.Time;
-import android.util.*;
+import android.support.v4.content.ContextCompat;
+import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import android.view.ViewGroup.LayoutParams;
-import android.view.Window;
-import android.view.WindowManager;
-import android.widget.*;
-
-import org.apache.http.client.HttpClient;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.HttpResponse;
-import org.apache.http.HttpEntity;
-
+import android.view.View;
+import android.view.ViewGroup;
+import processing.a2d.PGraphicsAndroid2D;
+import processing.android.AppComponent;
 import processing.data.*;
 import processing.event.*;
 import processing.opengl.*;
 
+public class PApplet extends Object implements PConstants {
 
-public class PApplet extends Activity implements PConstants, Runnable {
+  /**
+   * The surface this sketch draws to.
+   */
+  public PSurface surface;
+
+  /**
+   * The view group containing the surface view of the PApplet.
+   */
+  public int parentLayout = -1;
+
   /** The PGraphics renderer associated with this PApplet */
   public PGraphics g;
 
 //  static final public boolean DEBUG = true;
   static final public boolean DEBUG = false;
 
-  /** The frame containing this applet (if any) */
-//  public Frame frame;
+  // Convenience public constant holding the SDK version, akin to platform in Java mode
+  static final public int SDK = android.os.Build.VERSION.SDK_INT;
+//  static final public int SDK = Build.VERSION_CODES.ICE_CREAM_SANDWICH; // Forcing older SDK for testing
 
   /**
    * The screen size when the sketch was started. This is initialized inside
@@ -105,8 +106,8 @@ public class PApplet extends Activity implements PConstants, Runnable {
 //  static final boolean THREAD_DEBUG = false;
 
   /** Default width and height for applet when not specified */
-//  static public final int DEFAULT_WIDTH = 100;
-//  static public final int DEFAULT_HEIGHT = 100;
+  static public final int DEFAULT_WIDTH = 100;
+  static public final int DEFAULT_HEIGHT = 100;
 
   /**
    * Minimum dimensions for the window holding an applet.
@@ -125,9 +126,9 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * when the renderer is changed. This is the only way for us to handle
    * invoking the new renderer while also in the midst of rendering.
    */
-  static public class RendererChangeException extends RuntimeException { }
+//  static public class RendererChangeException extends RuntimeException { }
 
-  protected boolean surfaceReady;
+//  protected boolean surfaceReady;
 
   /**
    * Set true when the surface dimensions have changed, so that the PGraphics
@@ -154,13 +155,20 @@ public class PApplet extends Activity implements PConstants, Runnable {
   public int[] pixels;
 
   /** width of this applet's associated PGraphics */
-  public int width;
+  public int width = DEFAULT_WIDTH;
 
   /** height of this applet's associated PGraphics */
-  public int height;
+  public int height = DEFAULT_HEIGHT;
 
-  // can't call this because causes an ex, but could set elsewhere
-  //final float screenDensity = getResources().getDisplayMetrics().density;
+  /** The logical density of the display from getDisplayMetrics().density
+   * According to Android's documentation:
+   * This is a scaling factor for the Density Independent Pixel unit,
+   * where one DIP is one pixel on an approximately 160 dpi screen
+   * (for example a 240x320, 1.5"x2" screen), providing the baseline of the
+   * system's display. Thus on a 160dpi screen this density value will be 1;
+   * on a 120 dpi screen it would be .75; etc.
+   */
+  public float displayDensity = 1;
 
   /** absolute x position of input on screen */
   public int mouseX;
@@ -247,7 +255,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
 //  public MotionEvent motionEvent;
 
   /** Post events to the main thread that created the Activity */
-  Handler handler;
+//  Handler handler;
 
   /**
    * Last key pressed.
@@ -281,8 +289,39 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   public boolean focused = false;
 
-  protected boolean windowFocused = false;
-  protected boolean viewFocused = false;
+  /**
+   * Use in watch faces to check if the device in in ambient mode or interactive mode.
+   */
+  public boolean ambientMode = false;
+
+  /**
+   * Indicates whether the watch face is round or not.
+   */
+  public boolean isRound = false;
+
+  /**
+   * Watch face insets
+   */
+  public int insetLeft, insetRight = 0;
+  public int insetTop, insetBottom = 0;
+
+  /**
+   * Use in watch faces to store information abou the device screen
+   * https://developer.android.com/training/wearables/watch-faces/drawing.html#Screen
+   */
+  public boolean lowBitAmbient = false;
+  public boolean burnInProtection = false;
+
+  /**
+   * Offset for wallpapers, when user swipes across home screens.
+   */
+  public float offsetX = 0;
+  public float offsetY = 0;
+
+  /**
+   * Indicates if the wallpaper is in preview mode.
+   */
+  public boolean preview = false;
 
   /**
    * true if the applet is online.
@@ -299,6 +338,11 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   long millisOffset = System.currentTimeMillis();
 
+  protected boolean insideDraw;
+
+  /** Last time in nanoseconds that frameRate was checked */
+  protected long frameRateLastNanos = 0;
+
   /**
    * The current value of frames per second.
    * <P>
@@ -310,11 +354,11 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   public float frameRate = 10;
   /** Last time in nanoseconds that frameRate was checked */
-  protected long frameRateLastNanos = 0;
-
-  /** As of release 0116, frameRate(60) is called as a default */
-  protected float frameRateTarget = 60;
-  protected long frameRatePeriod = 1000000000L / 60L;
+//  protected long frameRateLastNanos = 0;
+//
+//  /** As of release 0116, frameRate(60) is called as a default */
+//  protected float frameRateTarget = 60;
+//  protected long frameRatePeriod = 1000000000L / 60L;
 
   protected boolean looping;
 
@@ -340,9 +384,9 @@ public class PApplet extends Activity implements PConstants, Runnable {
   /**
    * For Android, true if the activity has been paused.
    */
-  protected boolean paused;
+//  protected boolean paused;
 
-  protected SurfaceView surfaceView;
+//  protected SurfaceView surfaceView;
 
   /**
    * The Window object for Android.
@@ -355,7 +399,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   protected boolean exitCalled;
 
-  Thread thread;
+//  Thread thread;
 
   // messages to send if attached as an external vm
 
@@ -418,233 +462,225 @@ public class PApplet extends Activity implements PConstants, Runnable {
   static final String ERROR_MIN_MAX =
     "Cannot use min() or max() on an empty array.";
 
+  boolean insideSettings;
+
+  String renderer = JAVA2D;
+
+  int smooth = 1;  // default smoothing (whatever that means for the renderer)
+
+  public boolean fullScreen = false;
+
+  // Background default needs to be different from the default value in
+  // PGraphics.backgroundColor, otherwise size(100, 100) bg spills over.
+  // https://github.com/processing/processing/issues/2297
+  int windowColor = 0xffDDDDDD;
+
+  PStyle savedStyle;
 
   //////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////
 
+  /**
+   * Required empty constructor.
+   */
+  public PApplet() {
 
-  /** Called with the activity is first created. */
-  @Override
-  public void onCreate(Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
-//    println("PApplet.onCreate()");
+  }
 
-    if (DEBUG) println("onCreate() happening here: " + Thread.currentThread().getName());
 
-    Window window = getWindow();
+  public PSurface getSurface() {
+    return surface;
+  }
 
-    // Take up as much area as possible
-    requestWindowFeature(Window.FEATURE_NO_TITLE);
-    window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN);
 
-    // This does the actual full screen work
-    window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN);
+  public void initSurface(AppComponent component, SurfaceHolder holder) {
+    parentLayout = -1;
+    initSurface(null, null,  null, component, holder);
+  }
 
-    DisplayMetrics dm = new DisplayMetrics();
-    getWindowManager().getDefaultDisplay().getMetrics(dm);
-    displayWidth = dm.widthPixels;
-    displayHeight = dm.heightPixels;
-//    println("density is " + dm.density);
-//    println("densityDpi is " + dm.densityDpi);
-    if (DEBUG) println("display metrics: " + dm);
+  public void initSurface(LayoutInflater inflater, ViewGroup container,
+                          Bundle savedInstanceState,
+                          AppComponent component, SurfaceHolder holder) {
+    if (DEBUG) println("onCreateView() happening here: " + Thread.currentThread().getName());
 
-    //println("screen size is " + screenWidth + "x" + screenHeight);
+    component.initDimensions();
+    displayWidth = component.getDisplayWidth();
+    displayHeight = component.getDisplayHeight();
+    displayDensity = component.getDisplayDensity();
 
-//    LinearLayout layout = new LinearLayout(this);
-//    layout.setOrientation(LinearLayout.VERTICAL | LinearLayout.HORIZONTAL);
-//    viewGroup = new ViewGroup();
-//    surfaceView.setLayoutParams();
-//    viewGroup.setLayoutParams(LayoutParams.)
-//    RelativeLayout layout = new RelativeLayout(this);
-//    RelativeLayout overallLayout = new RelativeLayout(this);
-//    RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.WRAP_CONTENT, RelativeLayout.LayoutParams.FILL_PARENT);
-//lp.addRule(RelativeLayout.RIGHT_OF, tv1.getId());
-//    layout.setGravity(RelativeLayout.CENTER_IN_PARENT);
+    handleSettings();
 
-    int sw = sketchWidth();
-    int sh = sketchHeight();
-
-    if (sketchRenderer().equals(JAVA2D)) {
-      surfaceView = new SketchSurfaceView(this, sw, sh);
-    } else if (sketchRenderer().equals(P2D) || sketchRenderer().equals(P3D)) {
-      surfaceView = new SketchSurfaceViewGL(this, sw, sh, sketchRenderer().equals(P3D));
+    if (fullScreen && parentLayout == -1) {
+      // Setting the default height and width to be fullscreen
+      width = displayWidth;
+      height = displayHeight;
     }
-//    g = ((SketchSurfaceView) surfaceView).getGraphics();
 
-//    surfaceView.setLayoutParams(new LayoutParams(sketchWidth(), sketchHeight()));
+    String rendererName = sketchRenderer();
+    if (DEBUG) println("Renderer " + rendererName);
+    g = makeGraphics(width, height, rendererName, true);
+    if (DEBUG) println("Created renderer");
+    surface = g.createSurface(component, holder);
+    if (DEBUG) println("Created surface");
 
-//    layout.addView(surfaceView);
-//    surfaceView.setVisibility(1);
-//    println("visibility " + surfaceView.getVisibility() + " " + SurfaceView.VISIBLE);
-//    layout.addView(surfaceView);
-//    AttributeSet as = new AttributeSet();
-//    RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams(layout, as);
-
-//    lp.addRule(android.R.styleable.ViewGroup_Layout_layout_height,
-//    layout.add
-    //lp.addRule(, arg1)
-    //layout.addView(surfaceView, sketchWidth(), sketchHeight());
-
-//      new RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.WRAP_CONTENT,
-//        RelativeLayout.LayoutParams.FILL_PARENT);
-
-    if (sw == displayWidth && sh == displayHeight) {
-      // If using the full screen, don't embed inside other layouts
-      window.setContentView(surfaceView);
+    //set smooth level
+    if (smooth == 0) {
+      g.noSmooth();
     } else {
-      // If not using full screen, setup awkward view-inside-a-view so that
-      // the sketch can be centered on screen. (If anyone has a more efficient
-      // way to do this, please file an issue on Google Code, otherwise you
-      // can keep your "talentless hack" comments to yourself. Ahem.)
-      RelativeLayout overallLayout = new RelativeLayout(this);
-      RelativeLayout.LayoutParams lp =
-        new RelativeLayout.LayoutParams(LayoutParams.WRAP_CONTENT,
-                                        LayoutParams.WRAP_CONTENT);
-      lp.addRule(RelativeLayout.CENTER_IN_PARENT);
-
-      LinearLayout layout = new LinearLayout(this);
-      layout.addView(surfaceView, sketchWidth(), sketchHeight());
-      overallLayout.addView(layout, lp);
-      window.setContentView(overallLayout);
+      g.smooth(smooth);
     }
 
-    /*
-    // Here we use Honeycomb API (11+) to hide (in reality, just make the status icons into small dots)
-    // the status bar. Since the core is still built against API 7 (2.1), we use introspection to get
-    // the setSystemUiVisibility() method from the view class.
-    Method visibilityMethod = null;
-    try {
-      visibilityMethod = surfaceView.getClass().getMethod("setSystemUiVisibility", new Class[] { int.class});
-    } catch (NoSuchMethodException e) {
-      // Nothing to do. This means that we are running with a version of Android previous to Honeycomb.
+    if (parentLayout == -1) {
+      setFullScreenVisibility();
+      // Now we now the right width/height size for the renderer
+//      g.setSize(width, height); // do need this?
+      // Finalize surface initialization.
+      surface.initView(width, height);
+    } else {
+      surface.initView(inflater, container, savedInstanceState,
+                       fullScreen, width, height);
     }
-    if (visibilityMethod != null) {
-      try {
-        // This is equivalent to calling:
-        //surfaceView.setSystemUiVisibility(View.STATUS_BAR_HIDDEN);
-        // The value of View.STATUS_BAR_HIDDEN is 1.
-        visibilityMethod.invoke(surfaceView, new Object[] { 1 });
-      } catch (InvocationTargetException e) {
-      } catch (IllegalAccessException e) {
-      }
-    }
-    window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN);
-    */
-
-
-//    layout.addView(surfaceView, lp);
-//    surfaceView.setLayoutParams(new LayoutParams(sketchWidth(), sketchHeight()));
-
-//    RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams()
-//    layout.addView(surfaceView, new LayoutParams(arg0)
-
-    // TODO probably don't want to set these here, can't we wait for surfaceChanged()?
-    // removing this in 0187
-//    width = screenWidth;
-//    height = screenHeight;
-
-//    int left = (screenWidth - iwidth) / 2;
-//    int right = screenWidth - (left + iwidth);
-//    int top = (screenHeight - iheight) / 2;
-//    int bottom = screenHeight - (top + iheight);
-//    surfaceView.setPadding(left, top, right, bottom);
-    // android:layout_width
-
-//    window.setContentView(surfaceView);  // set full screen
-
-    // code below here formerly from init()
-
-    //millisOffset = System.currentTimeMillis(); // moved to the variable declaration
 
     finished = false; // just for clarity
-
     // this will be cleared by draw() if it is not overridden
     looping = true;
     redraw = true;  // draw this guy once
-//    firstMotion = true;
 
-    Context context = getApplicationContext();
-    sketchPath = context.getFilesDir().getAbsolutePath();
+    sketchPath = surface.getFilesDir().getAbsolutePath();
 
-//    Looper.prepare();
-    handler = new Handler();
-//    println("calling loop()");
-//    Looper.loop();
-//    println("done with loop() call, will continue...");
-
-    start();
+    if (DEBUG) println("Done with init surface");
   }
 
 
-  @Override
-  public void onConfigurationChanged(Configuration newConfig) {
-    if (DEBUG) System.out.println("configuration changed: " + newConfig);
-    super.onConfigurationChanged(newConfig);
+  public void startSurface() {
+    surface.startThread();
+  }
+
+  public View getRootView() {
+    return surface.getRootView();
+  }
+
+  private void setFullScreenVisibility() {
+    if (fullScreen) {
+      int visibility;
+      if (SDK < 19) {
+        // Pre-4.4
+        visibility = View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
+      } else {
+        // 4.4 and higher. Integer instead of constants defined in View so it can
+        // build with SDK < 4.4
+        visibility = 256 |   // View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                     512 |   // View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                     1024 |  // View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                     View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                     4 |     // View.SYSTEM_UI_FLAG_FULLSCREEN
+                     4096;   // View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        // However, this visibility does not fix a bug where the navigation area
+        // turns black after resuming the app:
+        // https://code.google.com/p/android/issues/detail?id=170752
+      }
+      surface.setSystemUiVisibility(visibility);
+    }
   }
 
 
-  @Override
-  protected void onResume() {
-    super.onResume();
+  public void onResume() {
+    if (DEBUG) System.out.println("PApplet.onResume() called");
+    if (parentLayout == -1) {
+      setFullScreenVisibility();
+    }
 
     // TODO need to bring back app state here!
-//    surfaceView.onResume();
-    if (DEBUG) System.out.println("PApplet.onResume() called");
-    paused = false;
+    // At least we restore the current style.
+    if (savedStyle != null && g != null) {
+      g.style(savedStyle);
+      savedStyle = null;
+    }
+
     handleMethods("resume");
-    //start();  // kick the thread back on
-    resume();
-//    surfaceView.onResume();
+
+    surface.resumeThread();
+    if (0 < frameCount) {
+      // Don't call resume() when the app is starting and setup() has not been
+      // called yet
+      // https://github.com/processing/processing-android/issues/274
+      resume();
+    }
   }
 
 
-  @Override
-  protected void onPause() {
-    super.onPause();
-
+  public void onPause() {
     // TODO need to save all application state here!
-//    System.out.println("PApplet.onPause() called");
-    paused = true;
+    // At least we save the current style.
+    if (g != null) {
+      savedStyle = new PStyle();
+      g.getStyle(savedStyle);
+    }
+
     handleMethods("pause");
+
+    surface.pauseThread();
     pause();  // handler for others to write
-//  synchronized (this) {
-//  paused = true;
-//}
-//    surfaceView.onPause();
   }
 
 
-  /**
-   * Developers can override here to save state. The 'paused' variable will be
-   * set before this function is called.
-   */
-  public void pause() {
-  }
-
-
-  /**
-   * Developers can override here to restore state. The 'paused' variable
-   * will be cleared before this function is called.
-   */
-  public void resume() {
-  }
-
-
-  @Override
   public void onDestroy() {
-//    stop();
     dispose();
     if (PApplet.DEBUG) {
       System.out.println("PApplet.onDestroy() called");
     }
-    super.onDestroy();
-    //finish();
   }
 
+
+  public void onStart() {
+    start();
+  }
+
+
+  public void onStop() {
+    stop();
+  }
+
+
+  public void onPermissionsGranted() {
+
+  }
+
+
+  /**
+   * @param method "size" or "fullScreen"
+   * @param args parameters passed to the function so we can show the user
+   * @return true if safely inside the settings() method
+   */
+  boolean insideSettings(String method, Object... args) {
+    if (insideSettings) {
+      return true;
+    }
+    final String url = "https://processing.org/reference/" + method + "_.html";
+    if (!external) {  // post a warning for users of Eclipse and other IDEs
+      StringList argList = new StringList(args);
+      System.err.println("When not using the PDE, " + method + "() can only be used inside settings().");
+      System.err.println("Remove the " + method + "() method from setup(), and add the following:");
+      System.err.println("public void settings() {");
+      System.err.println("  " + method + "(" + argList.join(", ") + ");");
+      System.err.println("}");
+    }
+    throw new IllegalStateException(method + "() cannot be used here, see " + url);
+  }
+
+
+  void handleSettings() {
+    insideSettings = true;
+    //Do stuff
+    settings();
+    insideSettings = false;
+  }
+
+
+  public void settings() {
+    //It'll be empty. Will be overridden by user's sketch class.
+  }
 
 
   //////////////////////////////////////////////////////////////
@@ -655,14 +691,19 @@ public class PApplet extends Activity implements PConstants, Runnable {
   // TODO this is only used by A2D, when finishing up a draw. but if the
   // surfaceview has changed, then it might belong to an a3d surfaceview. hrm.
   public SurfaceHolder getSurfaceHolder() {
-    return surfaceView.getHolder();
-//    return surfaceHolder;
+    SurfaceView view = surface.getSurfaceView();
+    if (view == null) {
+      // Watch faces don't have a surface view associated to them.
+      return null;
+    } else {
+      return view.getHolder();
+    }
   }
 
 
   /** Not official API, not guaranteed to work in the future. */
   public SurfaceView getSurfaceView() {
-    return surfaceView;
+    return surface.getSurfaceView();
   }
 
 
@@ -673,265 +714,8 @@ public class PApplet extends Activity implements PConstants, Runnable {
 //    public PGraphics getGraphics();
 //  }
 
-
-  // . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
-
-
-  public class SketchSurfaceView extends SurfaceView
-  implements /*SketchSurfaceView,*/ SurfaceHolder.Callback {
-    PGraphicsAndroid2D g2;
-    SurfaceHolder surfaceHolder;
-
-
-    public SketchSurfaceView(Context context, int wide, int high) {
-      super(context);
-
-//      println("surface holder");
-      // Install a SurfaceHolder.Callback so we get notified when the
-      // underlying surface is created and destroyed
-      surfaceHolder = getHolder();
-      surfaceHolder.addCallback(this);
-      surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_GPU);
-
-//      println("creating graphics");
-      g2 = new PGraphicsAndroid2D();
-      // Set semi-arbitrary size; will be set properly when surfaceChanged() called
-      g2.setSize(wide, high);
-//      newGraphics.setSize(getWidth(), getHeight());
-      g2.setParent(PApplet.this);
-      g2.setPrimary(true);
-      // Set the value for 'g' once everything is ready (otherwise rendering
-      // may attempt before setSize(), setParent() etc)
-//      g = newGraphics;
-      g = g2;  // assign the g object for the PApplet
-
-//      println("setting focusable, requesting focus");
-      setFocusable(true);
-      setFocusableInTouchMode(true);
-      requestFocus();
-//      println("done making surface view");
-    }
-
-
-//    public PGraphics getGraphics() {
-//      return g2;
-//    }
-
-
-    // part of SurfaceHolder.Callback
-    public void surfaceCreated(SurfaceHolder holder) {
-    }
-
-
-    // part of SurfaceHolder.Callback
-    public void surfaceDestroyed(SurfaceHolder holder) {
-      //g2.dispose();
-    }
-
-
-    // part of SurfaceHolder.Callback
-    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
-      if (DEBUG) {
-        System.out.println("SketchSurfaceView2D.surfaceChanged() " + w + " " + h);
-      }
-      surfaceChanged = true;
-
-//      width = w;
-//      height = h;
-//
-//      g.setSize(w, h);
-    }
-
-
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-      surfaceWindowFocusChanged(hasFocus);
-    }
-
-
-    @Override
-    public boolean onTouchEvent(MotionEvent event) {
-      return surfaceTouchEvent(event);
-    }
-
-
-    @Override
-    public boolean onKeyDown(int code, android.view.KeyEvent event) {
-      return surfaceKeyDown(code, event);
-    }
-
-
-    @Override
-    public boolean onKeyUp(int code, android.view.KeyEvent event) {
-      return surfaceKeyUp(code, event);
-    }
-
-
-    // don't think i want to call stop() from here, since it might be swapping renderers
-//    @Override
-//    protected void onDetachedFromWindow() {
-//      super.onDetachedFromWindow();
-//      stop();
-//    }
-  }
-
-
-  // . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
-
-
-  public class SketchSurfaceViewGL extends GLSurfaceView /*implements SketchSurfaceView*/ {
-    PGraphicsOpenGL g3;
-    SurfaceHolder surfaceHolder;
-
-
-    public SketchSurfaceViewGL(Context context, int wide, int high, boolean is3D) {
-      super(context);
-
-      // Check if the system supports OpenGL ES 2.0.
-      final ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-      final ConfigurationInfo configurationInfo = activityManager.getDeviceConfigurationInfo();
-      final boolean supportsGLES2 = configurationInfo.reqGlEsVersion >= 0x20000;
-
-      if (!supportsGLES2) {
-        throw new RuntimeException("OpenGL ES 2.0 is not supported by this device.");
-      }
-
-      surfaceHolder = getHolder();
-      // are these two needed?
-      surfaceHolder.addCallback(this);
-      //surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_GPU);
-
-      // The PGraphics object needs to be created here so the renderer is not
-      // null. This is required because PApplet.onResume events (which call
-      // this.onResume() and thus require a valid renderer) are triggered
-      // before surfaceChanged() is ever called.
-      if (is3D) {
-        g3 = new PGraphics3D();
-      } else {
-        g3 = new PGraphics2D();
-      }
-      g3.setParent(PApplet.this);
-      g3.setPrimary(true);
-      // Set semi-arbitrary size; will be set properly when surfaceChanged() called
-      g3.setSize(wide, high);
-
-      // Tells the default EGLContextFactory and EGLConfigChooser to create an GLES2 context.
-      setEGLContextClientVersion(2);
-
-      if (PGLES.ENABLE_MULTISAMPLING) {
-        setEGLConfigChooser(((PGLES)g3.pgl).getConfigChooser());
-      }
-
-      // The renderer can be set only once.
-      setRenderer(((PGLES)g3.pgl).getRenderer());
-      setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
-
-      // assign this g to the PApplet
-      g = g3;
-
-      setFocusable(true);
-      setFocusableInTouchMode(true);
-      requestFocus();
-    }
-
-
-    public PGraphics getGraphics() {
-      return g3;
-    }
-
-
-    // part of SurfaceHolder.Callback
-    @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-      super.surfaceCreated(holder);
-      if (DEBUG) {
-        System.out.println("surfaceCreated()");
-      }
-    }
-
-
-    // part of SurfaceHolder.Callback
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-      super.surfaceDestroyed(holder);
-      if (DEBUG) {
-        System.out.println("surfaceDestroyed()");
-      }
-
-      /*
-      // TODO: Check how to make sure of calling g3.dispose() when this call to
-      // surfaceDestoryed corresponds to the sketch being shut down instead of just
-      // taken to the background.
-
-      // For instance, something like this would be ok?
-      // The sketch is being stopped, so we dispose the resources.
-      if (!paused) {
-        g3.dispose();
-      }
-      */
-    }
-
-
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
-      super.surfaceChanged(holder, format, w, h);
-
-      if (DEBUG) {
-        System.out.println("SketchSurfaceView3D.surfaceChanged() " + w + " " + h);
-      }
-      surfaceChanged = true;
-//      width = w;
-//      height = h;
-//      g.setSize(w, h);
-
-      // No need to call g.setSize(width, height) b/c super.surfaceChanged()
-      // will trigger onSurfaceChanged in the renderer, which calls setSize().
-      // -- apparently not true? (100110)
-    }
-
-
-    /**
-     * Inform the view that the window focus has changed.
-     */
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-      surfaceWindowFocusChanged(hasFocus);
-//      super.onWindowFocusChanged(hasFocus);
-//      focused = hasFocus;
-//      if (focused) {
-////        println("got focus");
-//        focusGained();
-//      } else {
-////        println("lost focus");
-//        focusLost();
-//      }
-    }
-
-
-    @Override
-    public boolean onTouchEvent(MotionEvent event) {
-      return surfaceTouchEvent(event);
-    }
-
-
-    @Override
-    public boolean onKeyDown(int code, android.view.KeyEvent event) {
-      return surfaceKeyDown(code, event);
-    }
-
-
-    @Override
-    public boolean onKeyUp(int code, android.view.KeyEvent event) {
-      return surfaceKeyUp(code, event);
-    }
-
-
-    // don't think i want to call stop() from here, since it might be swapping renderers
-//    @Override
-//    protected void onDetachedFromWindow() {
-//      super.onDetachedFromWindow();
-//      stop();
-//    }
+  public void surfaceChanged() {
+    surfaceChanged = true;
   }
 
 
@@ -943,7 +727,6 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * by Android as well.
    */
   public void surfaceWindowFocusChanged(boolean hasFocus) {
-    super.onWindowFocusChanged(hasFocus);
     focused = hasFocus;
     if (focused) {
       focusGained();
@@ -965,17 +748,17 @@ public class PApplet extends Activity implements PConstants, Runnable {
   }
 
 
-  public boolean surfaceKeyDown(int code, android.view.KeyEvent event) {
+  public void surfaceKeyDown(int code, android.view.KeyEvent event) {
     //  System.out.println("got onKeyDown for " + code + " " + event);
     nativeKeyEvent(event);
-    return super.onKeyDown(code, event);
+//    return super.onKeyDown(code, event);
   }
 
 
-  public boolean surfaceKeyUp(int code, android.view.KeyEvent event) {
+  public void surfaceKeyUp(int code, android.view.KeyEvent event) {
     //  System.out.println("got onKeyUp for " + code + " " + event);
     nativeKeyEvent(event);
-    return super.onKeyUp(code, event);
+//    return super.onKeyUp(code, event);
   }
 
 
@@ -986,35 +769,51 @@ public class PApplet extends Activity implements PConstants, Runnable {
     return 1;
   }
 
+  public int sketchKind() {
+    return AppComponent.FRAGMENT;
+  }
 
-  public int sketchWidth() {
-    return displayWidth;
+  final public int sketchWidth() {
+    if (fullScreen) {
+      return displayWidth;
+    }
+    return width;
   }
 
 
-  public int sketchHeight() {
-    return displayHeight;
+  final public  int sketchHeight() {
+    if (fullScreen) {
+      return displayHeight;
+    }
+    return height;
   }
 
 
-  public String sketchRenderer() {
-    return JAVA2D;
+  final public String sketchRenderer() {
+    return renderer;
   }
+
+
+  final public int sketchWindowColor() {
+    return windowColor;
+  }
+
 
 
   public void orientation(int which) {
-    if (which == PORTRAIT) {
-      setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-    } else if (which == LANDSCAPE) {
-      setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-    }
+    surface.setOrientation(which);
   }
 
 
-//  public int sketchOrientation() {
-//    return ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
-//    //setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-//  }
+  public boolean checkPermission(String permission) {
+    Context context = surface.getContext();
+    if (context != null) {
+      int check = ContextCompat.checkSelfPermission(context, permission);
+      return check == PackageManager.PERMISSION_GRANTED;
+    } else {
+      return false;
+    }
+  }
 
 
   // . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
@@ -1029,13 +828,8 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * PAppletGL needs to have a usable screen before getting things rolling.
    */
   public void start() {
-    finished = false;
-    paused = false; // unpause the thread
-
-    if (thread == null) {
-      thread = new Thread(this, "Animation Thread");
-      thread.start();
-    }
+    resume();
+    surface.resumeThread();
   }
 
 
@@ -1050,12 +844,27 @@ public class PApplet extends Activity implements PConstants, Runnable {
   public void stop() {
     // this used to shut down the sketch, but that code has
     // been moved to dispose()
-
-    paused = true; // sleep the animation thread
+    pause();
+    surface.pauseThread();
 
     //TODO listeners
   }
 
+
+  /**
+   * Developers can override here to save state. The 'paused' variable will be
+   * set before this function is called.
+   */
+  public void pause() {
+  }
+
+
+  /**
+   * Developers can override here to restore state. The 'paused' variable
+   * will be cleared before this function is called.
+   */
+  public void resume() {
+  }
 
   /**
    * Called by the browser or applet viewer to inform this applet
@@ -1071,9 +880,9 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * no guarantees on when they're run (on browser quit, or
    * when moving between pages), though.
    */
-  public void destroy() {
-    ((PApplet)this).exit();
-  }
+//  public void destroy() {
+//    ((PApplet)this).exit();
+//  }
 
 
   /**
@@ -1416,6 +1225,54 @@ public class PApplet extends Activity implements PConstants, Runnable {
 
 
   /**
+   * Create a full-screen sketch using the default renderer.
+   */
+  public void fullScreen() {
+    if (!fullScreen) {
+      if (insideSettings("fullScreen")) {
+        this.fullScreen = true;
+      }
+    }
+  }
+
+
+  public void fullScreen(int display) {
+    //Display index doesn't make sense in Android.
+    //Should we throw some error in log ?
+    if (!fullScreen /*|| display != this.display*/) {
+      if (insideSettings("fullScreen", display)) {
+        this.fullScreen = true;
+//        this.display = display;
+      }
+    }
+  }
+
+
+  public void fullScreen(String renderer) {
+    if (!fullScreen ||
+        !renderer.equals(this.renderer)) {
+      if (insideSettings("fullScreen", renderer)) {
+        this.fullScreen = true;
+        this.renderer = renderer;
+      }
+    }
+  }
+
+
+  public void fullScreen(String renderer, int display) {
+    if (!fullScreen ||
+        !renderer.equals(this.renderer) /*||
+        display != this.display*/) {
+      if (insideSettings("fullScreen", renderer, display)) {
+        this.fullScreen = true;
+        this.renderer = renderer;
+//        this.display = display;
+      }
+    }
+  }
+
+
+  /**
    * Starts up and creates a two-dimensional drawing surface, or resizes the
    * current drawing surface.
    * <P>
@@ -1425,13 +1282,63 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * previous renderer and simply resize it.
    */
   public void size(int iwidth, int iheight) {
-    size(iwidth, iheight, P2D, null);
+    if (iwidth != this.width || iheight != this.height) {
+      if (insideSettings("size", iwidth, iheight)) {
+        this.width = iwidth;
+        this.height = iheight;
+      }
+    }
   }
 
 
   public void size(int iwidth, int iheight, String irenderer) {
-    size(iwidth, iheight, irenderer, null);
+    if (iwidth != this.width || iheight != this.height ||
+        !this.renderer.equals(irenderer)) {
+      if (insideSettings("size", iwidth, iheight, irenderer)) {
+        this.width = iwidth;
+        this.height = iheight;
+        this.renderer = irenderer;
+      }
+    }
   }
+
+
+//. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+
+ public void smooth() {
+   smooth(1);
+ }
+
+
+ public void smooth(int level) {
+   if (insideSettings) {
+     this.smooth = level;
+
+   } else if (this.smooth != level) {
+     smoothWarning("smooth");
+   }
+ }
+
+
+ public void noSmooth() {
+   if (insideSettings) {
+     this.smooth = 0;
+
+   } else if (this.smooth != 0) {
+     smoothWarning("noSmooth");
+   }
+ }
+
+
+ private void smoothWarning(String method) {
+   // When running from the PDE, say setup(), otherwise say settings()
+   final String where = external ? "setup" : "settings";
+   PGraphics.showWarning("%s() can only be used inside %s()", method, where);
+ }
+
+
+ // . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 
 
   // not finished yet--will swap the renderer at a bad time
@@ -1467,82 +1374,15 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   public void size(final int iwidth, final int iheight,
                    final String irenderer, final String ipath) {
-    System.out.println("This size() method is ignored on Android.");
-    System.out.println("See http://wiki.processing.org/w/Android for more information.");
-
-    /*
-//    Looper.prepare();
-    // Run this from the EDT, just cuz it's AWT stuff (or maybe later Swing)
-//    new Handler().post(new Runnable() {
-    handler.post(new Runnable() {
-      public void run() {
-        println("Handler is on thread " + Thread.currentThread().getName());
-//        // Set the preferred size so that the layout managers can handle it
-////        setPreferredSize(new Dimension(iwidth, iheight));
-////        setSize(iwidth, iheight);
-//        g.setSize(iwidth, iheight);
-//      }
-//    });
-
-    // ensure that this is an absolute path
-//    if (ipath != null) ipath = savePath(ipath);
-        // no path renderers supported yet
-
-    println("I'm the ole thread " + Thread.currentThread().getName());
-    String currentRenderer = g.getClass().getName();
-    if (currentRenderer.equals(irenderer)) {
-      println("resizing renderer inside size(....)");
-      // Avoid infinite loop of throwing exception to reset renderer
-      resizeRenderer(iwidth, iheight);
-      //redraw();  // will only be called insize draw()
-
-    } else {  // renderer is being changed
-      println("changing renderer inside size(....)");
-
-      // otherwise ok to fall through and create renderer below
-      // the renderer is changing, so need to create a new object
-//      g = makeGraphics(iwidth, iheight, irenderer, ipath, true);
-//      width = iwidth;
-//      height = iheight;
-//      if ()
-
-      // Remove the old view from the layout
-      layout.removeView(surfaceView);
-
-      if (irenderer.equals(A2D)) {
-        surfaceView = new SketchSurfaceView2D(PApplet.this, iwidth, iheight);
-      } else if (irenderer.equals(A3D)) {
-        surfaceView = new SketchSurfaceView3D(PApplet.this, iwidth, iheight);
+    if (iwidth != this.width || iheight != this.height ||
+        !this.renderer.equals(irenderer)) {
+      if (insideSettings("size", iwidth, iheight, irenderer,
+          ipath)) {
+        this.width = iwidth;
+        this.height = iheight;
+        this.renderer = irenderer;
       }
-      g = ((SketchSurfaceView) surfaceView).getGraphics();
-
-      // these don't seem like a good idea
-//      width = screenWidth;
-//      height = screenHeight;
-
-//      println("getting window");
-//      Window window = getWindow();
-//      window.setContentView(surfaceView);  // set full screen
-//      layout.removeAllViews();
-      layout.addView(surfaceView);
-
-      // fire resize event to make sure the applet is the proper size
-//      setSize(iwidth, iheight);
-      // this is the function that will run if the user does their own
-      // size() command inside setup, so set defaultSize to false.
-//      defaultSize = false;
-
-      // throw an exception so that setup() is called again
-      // but with a properly sized render
-      // this is for opengl, which needs a valid, properly sized
-      // display before calling anything inside setup().
-//      throw new RendererChangeException();
-      println("interrupting animation thread");
-      thread.interrupt();
     }
-      }
-    });
-*/
   }
 
 
@@ -1602,16 +1442,23 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * </UL>
    */
   public PGraphics createGraphics(int iwidth, int iheight, String irenderer) {
+    return makeGraphics(iwidth, iheight, irenderer, false);
+  }
+
+
+  protected PGraphics makeGraphics(int w, int h,
+                                   String renderer, boolean primary) {
     PGraphics pg = null;
-    if (irenderer.equals(JAVA2D)) {
+    if (renderer.equals(JAVA2D)) {
       pg = new PGraphicsAndroid2D();
-    } else if (irenderer.equals(P2D)) {
-      if (!g.isGL()) {
+    } else if (renderer.equals(P2D)) {
+      if (!primary && !g.isGL()) {
         throw new RuntimeException("createGraphics() with P2D requires size() to use P2D or P3D");
       }
       pg = new PGraphics2D();
-    } else if (irenderer.equals(P3D)) {
-      if (!g.isGL()) {
+
+    } else if (renderer.equals(P3D)) {
+      if (!primary && !g.isGL()) {
         throw new RuntimeException("createGraphics() with P3D or OPENGL requires size() to use P2D or P3D");
       }
       pg = new PGraphics3D();
@@ -1619,12 +1466,8 @@ public class PApplet extends Activity implements PConstants, Runnable {
       Class<?> rendererClass = null;
       Constructor<?> constructor = null;
       try {
-        // The context class loader doesn't work:
-        //rendererClass = Thread.currentThread().getContextClassLoader().loadClass(irenderer);
-        // even though it should, according to this discussion:
         // http://code.google.com/p/android/issues/detail?id=11101
-        // While the method that is not supposed to work, using the class loader, does:
-        rendererClass = this.getClass().getClassLoader().loadClass(irenderer);
+        rendererClass = Thread.currentThread().getContextClassLoader().loadClass(renderer);
       } catch (ClassNotFoundException cnfe) {
         throw new RuntimeException("Missing renderer class");
       }
@@ -1648,18 +1491,19 @@ public class PApplet extends Activity implements PConstants, Runnable {
           } catch (InstantiationException e) {
             e.printStackTrace();
             throw new RuntimeException(e.getMessage());
+          } catch (IllegalArgumentException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
           }
         }
       }
     }
 
     pg.setParent(this);
-    pg.setPrimary(false);
-    pg.setSize(iwidth, iheight);
-
+    pg.setPrimary(primary);
+    pg.setSize(w, h);
     return pg;
   }
-
 
   /**
    * Create an offscreen graphics surface for drawing, in this case
@@ -1808,9 +1652,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
   //////////////////////////////////////////////////////////////
 
 
-  /**
-   * Main method for the primary animation thread.
-   */
+/*
   public void run() {  // not good to make this synchronized, locks things up
     long beforeTime = System.nanoTime();
     long overSleepTime = 0L;
@@ -1820,7 +1662,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
     // animation thread yields to other running threads.
     final int NO_DELAYS_PER_YIELD = 15;
 
-    while ((Thread.currentThread() == thread) && !finished) {
+    while (!finished) {
 
       while (paused) {
         try{
@@ -1830,27 +1672,8 @@ public class PApplet extends Activity implements PConstants, Runnable {
         }
       }
 
-      // Don't resize the renderer from the EDT (i.e. from a ComponentEvent),
-      // otherwise it may attempt a resize mid-render.
-//      if (resizeRequest) {
-//        resizeRenderer(resizeWidth, resizeHeight);
-//        resizeRequest = false;
-//      }
-
       // render a single frame
       if (g != null) g.requestDraw();
-//      g.requestDraw();
-//      surfaceView.requestDraw();
-
-      // removed in android
-//      if (frameCount == 1) {
-//        // Call the request focus event once the image is sure to be on
-//        // screen and the component is valid. The OpenGL renderer will
-//        // request focus for its canvas inside beginDraw().
-//        // http://java.sun.com/j2se/1.4.2/docs/api/java/awt/doc-files/FocusSpec.html
-//        //println("requesting focus");
-//        requestFocus();
-//      }
 
       // wait for update & paint to happen before drawing next frame
       // this is necessary since the drawing is sometimes in a
@@ -1892,126 +1715,109 @@ public class PApplet extends Activity implements PConstants, Runnable {
       // If the user called the exit() function, the window should close,
       // rather than the sketch just halting.
       if (exitCalled) {
-        exit2();
+        exitActual();
       }
     }
   }
-
+*/
 
   public void handleDraw() {
-    if (DEBUG) {
-      println("inside handleDraw() " + millis() +
-              " changed=" + surfaceChanged +
-              " ready=" + surfaceReady +
-              " paused=" + paused +
-              " looping=" + looping +
-              " redraw=" + redraw);
-    }
-    if (surfaceChanged) {
-      int newWidth = surfaceView.getWidth();
-      int newHeight = surfaceView.getHeight();
-      if (newWidth != width || newHeight != height) {
-        width = newWidth;
-        height = newHeight;
-        g.setSize(width, height);
-      }
-      surfaceChanged = false;
-      surfaceReady = true;
-      if (DEBUG) {
-        println("surfaceChanged true, resized to " + width + "x" + height);
-      }
+    //debug("handleDraw() " + g + " " + looping + " " + redraw + " valid:" + this.isValid() + " visible:" + this.isVisible());
+
+    if (g == null) return;
+
+    if (!surfaceChanged && parentLayout != -1) {
+      // When using a parent layout, don't start drawing until the sketch
+      // has been properly sized.
+      return;
     }
 
-//    if (surfaceView.isShown()) {
-//      println("surface view not visible, getting out");
-//      return;
-//    } else {
-//      println("surface set to go.");
+//    if (surfaceChanged) {
+//      surfaceChanged = false;
+//      surfaceReady = true;
 //    }
 
-    // don't start drawing (e.g. don't call setup) until there's a legitimate
-    // width and height that have been set by surfaceChanged().
-//    boolean validSize = width != 0 && height != 0;
-//    println("valid size = " + validSize + " (" + width + "x" + height + ")");
-    if (canDraw()) {
-//      if (!g.canDraw()) {
-//        // Don't draw if the renderer is not yet ready.
-//        // (e.g. OpenGL has to wait for a peer to be on screen)
-//        return;
-//      }
+    if (!looping && !redraw) return;
 
-      g.beginDraw();
+    if (insideDraw) {
+      System.err.println("handleDraw() called before finishing");
+      System.exit(1);
+    }
 
-      long now = System.nanoTime();
+    insideDraw = true;
+    g.beginDraw();
+//    if (recorder != null) {
+//      recorder.beginDraw();
+//    }
 
-      if (frameCount == 0) {
-        try {
-          //println("Calling setup()");
-          setup();
-          //println("Done with setup()");
-
-        } catch (RendererChangeException e) {
-          // Give up, instead set the new renderer and re-attempt setup()
-          return;
-        }
-//        this.defaultSize = false;
-
-      } else {  // frameCount > 0, meaning an actual draw()
-        // update the current frameRate
-        double rate = 1000000.0 / ((now - frameRateLastNanos) / 1000000.0);
-        float instantaneousRate = (float) rate / 1000.0f;
-        frameRate = (frameRate * 0.9f) + (instantaneousRate * 0.1f);
-
-        if (frameCount != 0) {
-          handleMethods("pre");
-        }
-
-        // use dmouseX/Y as previous mouse pos, since this is the
-        // last position the mouse was in during the previous draw.
-        pmouseX = dmouseX;
-        pmouseY = dmouseY;
-//        pmotionX = dmotionX;
-//        pmotionY = dmotionY;
-
-        //println("Calling draw()");
-        draw();
-        //println("Done calling draw()");
-
-        // dmouseX/Y is updated only once per frame (unlike emouseX/Y)
-        dmouseX = mouseX;
-        dmouseY = mouseY;
-//        dmotionX = motionX;
-//        dmotionY = motionY;
-
-        // these are called *after* loop so that valid
-        // drawing commands can be run inside them. it can't
-        // be before, since a call to background() would wipe
-        // out anything that had been drawn so far.
-//        dequeueMotionEvents();
-//        dequeueKeyEvents();
-        dequeueEvents();
-
-        handleMethods("draw");
-
-        redraw = false;  // unset 'redraw' flag in case it was set
-        // (only do this once draw() has run, not just setup())
-      }
+    if (requestedNoLoop) {
+      // noLoop() was called in the previous frame, with a GL renderer, but now
+      // we are sure that the frame is properly displayed.
+      looping = false;
+      requestedNoLoop = false;
+      // We are done, we only need to finish the frame and exit.
       g.endDraw();
+      insideDraw = false;
+      return;
+    }
+
+    long now = System.nanoTime();
+
+    if (frameCount == 0) {
+      setup();
+
+    } else {  // frameCount > 0, meaning an actual draw()
+      // update the current frameRate
+      double rate = 1000000.0 / ((now - frameRateLastNanos) / 1000000.0);
+      float instantaneousRate = (float) (rate / 1000.0);
+      frameRate = (frameRate * 0.9f) + (instantaneousRate * 0.1f);
 
       if (frameCount != 0) {
-        handleMethods("post");
+        handleMethods("pre");
       }
 
-      frameRateLastNanos = now;
-      frameCount++;
+      // use dmouseX/Y as previous mouse pos, since this is the
+      // last position the mouse was in during the previous draw.
+      pmouseX = dmouseX;
+      pmouseY = dmouseY;
+
+      draw();
+
+      // dmouseX/Y is updated only once per frame (unlike emouseX/Y)
+      dmouseX = mouseX;
+      dmouseY = mouseY;
+
+      // these are called *after* loop so that valid
+      // drawing commands can be run inside them. it can't
+      // be before, since a call to background() would wipe
+      // out anything that had been drawn so far.
+      dequeueEvents();
+
+      handleMethods("draw");
+
+      redraw = false;  // unset 'redraw' flag in case it was set
+      // (only do this once draw() has run, not just setup())
     }
+    g.endDraw();
+
+//    if (recorder != null) {
+//      recorder.endDraw();
+//    }
+    insideDraw = false;
+
+    if (frameCount != 0) {
+      handleMethods("post");
+    }
+
+    frameRateLastNanos = now;
+    frameCount++;
   }
 
 
   /** Not official API, not guaranteed to work in the future. */
-  public boolean canDraw() {
-    return g != null && surfaceReady && !paused && (looping || redraw);
-  }
+//  public boolean canDraw() {
+//    return g != null && surfaceReady && !paused && (looping || redraw);
+//  }
 
 
   //////////////////////////////////////////////////////////////
@@ -2043,10 +1849,27 @@ public class PApplet extends Activity implements PConstants, Runnable {
   }
 
 
+  // This auxiliary variable is used to implement a little hack that fixes
+  // https://github.com/processing/processing-android/issues/147
+  // on older devices where the last frame cannot be maintained after ending
+  // the rendering in GL. The trick consists in running one more frame after the
+  // noLoop() call, which ensures that the FBO layer is properly initialized
+  // and drawn with the contents of the previous frame.
+  private boolean requestedNoLoop = false;
+
   synchronized public void noLoop() {
     if (looping) {
-      looping = false;
+      if (g instanceof PGraphicsOpenGL) {
+        requestedNoLoop = true;
+      } else {
+        looping = false;
+      }
     }
+  }
+
+
+  public boolean isLooping() {
+    return looping;
   }
 
 
@@ -2747,12 +2570,6 @@ public class PApplet extends Activity implements PConstants, Runnable {
   }
 
 
-  @Override
-  public void onBackPressed() {
-	  exit();
-  }
-
-
   protected void nativeKeyEvent(android.view.KeyEvent event) {
     // event.isPrintingKey() returns false for whitespace and others,
     // which is a problem if the space bar or tab key are used.
@@ -2837,8 +2654,6 @@ public class PApplet extends Activity implements PConstants, Runnable {
   // getting the time
 
 
-  static protected Time time = new Time();
-
   /**
    * Get the number of milliseconds since the applet started.
    * <P>
@@ -2851,16 +2666,12 @@ public class PApplet extends Activity implements PConstants, Runnable {
 
   /** Seconds position of the current time. */
   static public int second() {
-    //return Calendar.getInstance().get(Calendar.SECOND);
-    time.setToNow();
-    return time.second;
+    return Calendar.getInstance().get(Calendar.SECOND);
   }
 
   /** Minutes position of the current time. */
   static public int minute() {
-    //return Calendar.getInstance().get(Calendar.MINUTE);
-    time.setToNow();
-    return time.minute;
+    return Calendar.getInstance().get(Calendar.MINUTE);
   }
 
   /**
@@ -2871,9 +2682,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * if (yankeeHour == 0) yankeeHour = 12;</PRE>
    */
   static public int hour() {
-    //return Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
-    time.setToNow();
-    return time.hour;
+    return Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
   }
 
   /**
@@ -2883,9 +2692,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * or day of the year (1..365) then use java's Calendar.get()
    */
   static public int day() {
-    //return Calendar.getInstance().get(Calendar.DAY_OF_MONTH);
-    time.setToNow();
-    return time.monthDay;
+    return Calendar.getInstance().get(Calendar.DAY_OF_MONTH);
   }
 
   /**
@@ -2893,18 +2700,14 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   static public int month() {
     // months are number 0..11 so change to colloquial 1..12
-    //return Calendar.getInstance().get(Calendar.MONTH) + 1;
-    time.setToNow();
-    return time.month + 1;
+    return Calendar.getInstance().get(Calendar.MONTH) + 1;
   }
 
   /**
    * Get the current year.
    */
   static public int year() {
-    //return Calendar.getInstance().get(Calendar.YEAR);
-    time.setToNow();
-    return time.year;
+    return Calendar.getInstance().get(Calendar.YEAR);
   }
 
 
@@ -2950,10 +2753,12 @@ public class PApplet extends Activity implements PConstants, Runnable {
    *
    * ( end auto-generated )
    */
-  public void frameRate(float newRateTarget) {
-    frameRateTarget = newRateTarget;
-    frameRatePeriod = (long) (1000000000.0 / frameRateTarget);
-    g.setFrameRate(newRateTarget);
+  public void frameRate(float fps) {
+//
+//    frameRateTarget = newRateTarget;
+//    frameRatePeriod = (long) (1000000000.0 / frameRateTarget);
+//    g.setFrameRate(newRateTarget);
+    surface.setFrameRate(fps);
   }
 
 
@@ -3008,7 +2813,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   public void link(String url, String frameTitle) {
     Intent viewIntent = new Intent("android.intent.action.VIEW", Uri.parse(url));
-    startActivity(viewIntent);
+    surface.startActivity(viewIntent);
   }
 
 
@@ -3062,22 +2867,23 @@ public class PApplet extends Activity implements PConstants, Runnable {
     die(what);
   }
 
+  /*
+   // No need for these two, as explicit app exit is not required on Android, read
+   // this discussion:
+   // http://stackoverflow.com/questions/2033914/quitting-an-application-is-that-frowned-upon/2034238
 
-  /**
-   * Call to safely exit the sketch when finished. For instance,
-   * to render a single frame, save it, and quit.
-   */
+   // Call to safely exit the sketch when finished. For instance,
+   // to render a single frame, save it, and quit.
   public void exit() {
-//    println("exit() called");
-    if (thread == null) {
+    if (surface.isStopped()) {
       // exit immediately, stop() has already been called,
       // meaning that the main thread has long since exited
-      exit2();
+      exitActual();
 
     } else if (looping) {
       // stop() will be called as the thread exits
       finished = true;
-      // tell the code to call exit2() to do a System.exit()
+      // tell the code to call exitActual() to do a System.exit()
       // once the next draw() has completed
       exitCalled = true;
 
@@ -3087,18 +2893,18 @@ public class PApplet extends Activity implements PConstants, Runnable {
       dispose();
 
       // now get out
-      exit2();
+      exitActual();
     }
   }
 
-
-  void exit2() {
+  public void exitActual() {
     try {
       System.exit(0);
     } catch (SecurityException e) {
       // don't care about applet security exceptions
     }
   }
+  */
 
   /**
    * Called to dispose of resources and shut down the sketch.
@@ -3112,11 +2918,17 @@ public class PApplet extends Activity implements PConstants, Runnable {
     finished = true;  // let the sketch know it is shut down time
 
     // don't run stop and disposers twice
-    if (thread == null) return;
-    thread = null;
+//    if (thread == null) return;
+//    thread = null;
 
     // call to shut down renderer, in case it needs it (pdf does)
-    if (g != null) g.dispose();
+//    if (surface != null) surface.dispose();
+    if (surface != null && surface.stopThread()) {
+      if (g != null) {
+        g.dispose();
+        surface.dispose();
+      }
+    }
 
     handleMethods("dispose");
   }
@@ -3370,6 +3182,25 @@ public class PApplet extends Activity implements PConstants, Runnable {
     System.out.flush();
   }
 
+  /**
+   * @param variables list of data, separated by commas
+   */
+  static public void print(Object... variables) {
+    StringBuilder sb = new StringBuilder();
+    for (Object o : variables) {
+      if (sb.length() != 0) {
+        sb.append(" ");
+      }
+      if (o == null) {
+        sb.append("null");
+      } else {
+        sb.append(o.toString());
+      }
+    }
+    System.out.print(sb.toString());
+  }
+
+  /*
   static public void print(Object what) {
     if (what == null) {
       // special case since this does fuggly things on > 1.1
@@ -3378,6 +3209,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
       System.out.println(what.toString());
     }
   }
+  */
 
   //
 
@@ -3409,6 +3241,15 @@ public class PApplet extends Activity implements PConstants, Runnable {
 
   static public void println(String what) {
     print(what); System.out.println();
+  }
+
+  /**
+   * @param variables list of data, separated by commas
+   */
+  static public void println(Object... variables) {
+//    System.out.println("got " + variables.length + " variables");
+    print(variables);
+    println();
   }
 
   static public void println(Object what) {
@@ -3489,6 +3330,100 @@ public class PApplet extends Activity implements PConstants, Runnable {
         System.out.println(what);
       }
     }
+  }
+
+
+/**
+ * @webref output:text_area
+ * @param what one-dimensional array
+ * @usage IDE
+ * @see PApplet#print(byte)
+ * @see PApplet#println()
+ */
+  static public void printArray(Object what) {
+    if (what == null) {
+      // special case since this does fuggly things on > 1.1
+      System.out.println("null");
+
+    } else {
+      String name = what.getClass().getName();
+      if (name.charAt(0) == '[') {
+        switch (name.charAt(1)) {
+        case '[':
+          // don't even mess with multi-dimensional arrays (case '[')
+          // or anything else that's not int, float, boolean, char
+          System.out.println(what);
+          break;
+
+        case 'L':
+          // print a 1D array of objects as individual elements
+          Object poo[] = (Object[]) what;
+          for (int i = 0; i < poo.length; i++) {
+            if (poo[i] instanceof String) {
+              System.out.println("[" + i + "] \"" + poo[i] + "\"");
+            } else {
+              System.out.println("[" + i + "] " + poo[i]);
+            }
+          }
+          break;
+
+        case 'Z':  // boolean
+          boolean zz[] = (boolean[]) what;
+          for (int i = 0; i < zz.length; i++) {
+            System.out.println("[" + i + "] " + zz[i]);
+          }
+          break;
+
+        case 'B':  // byte
+          byte bb[] = (byte[]) what;
+          for (int i = 0; i < bb.length; i++) {
+            System.out.println("[" + i + "] " + bb[i]);
+          }
+          break;
+
+        case 'C':  // char
+          char cc[] = (char[]) what;
+          for (int i = 0; i < cc.length; i++) {
+            System.out.println("[" + i + "] '" + cc[i] + "'");
+          }
+          break;
+
+        case 'I':  // int
+          int ii[] = (int[]) what;
+          for (int i = 0; i < ii.length; i++) {
+            System.out.println("[" + i + "] " + ii[i]);
+          }
+          break;
+
+        case 'J':  // int
+          long jj[] = (long[]) what;
+          for (int i = 0; i < jj.length; i++) {
+            System.out.println("[" + i + "] " + jj[i]);
+          }
+          break;
+
+        case 'F':  // float
+          float ff[] = (float[]) what;
+          for (int i = 0; i < ff.length; i++) {
+            System.out.println("[" + i + "] " + ff[i]);
+          }
+          break;
+
+        case 'D':  // double
+          double dd[] = (double[]) what;
+          for (int i = 0; i < dd.length; i++) {
+            System.out.println("[" + i + "] " + dd[i]);
+          }
+          break;
+
+        default:
+          System.out.println(what);
+        }
+      } else {  // not an array
+        System.out.println(what);
+      }
+    }
+    System.out.flush();
   }
 
   //
@@ -4145,31 +4080,6 @@ public class PApplet extends Activity implements PConstants, Runnable {
 
   //////////////////////////////////////////////////////////////
 
-  // EXTENSIONS
-
-
-  /**
-   * Get the compression-free extension for this filename.
-   * @param filename The filename to check
-   * @return an extension, skipping past .gz if it's present
-   */
-  static public String checkExtension(String filename) {
-    // Don't consider the .gz as part of the name, createInput()
-    // and createOuput() will take care of fixing that up.
-    if (filename.toLowerCase().endsWith(".gz")) {
-      filename = filename.substring(0, filename.length() - 3);
-    }
-    int dotIndex = filename.lastIndexOf('.');
-    if (dotIndex != -1) {
-      return filename.substring(dotIndex + 1).toLowerCase();
-    }
-    return null;
-  }
-
-
-
-  //////////////////////////////////////////////////////////////
-
   // DATA I/O
 
 
@@ -4229,6 +4139,105 @@ public class PApplet extends Activity implements PConstants, Runnable {
 
   public boolean saveXML(XML xml, String filename, String options) {
     return xml.save(saveFile(filename), options);
+  }
+
+
+  /**
+   * @webref input:files
+   * @param input String to parse as a JSONObject
+   * @see PApplet#loadJSONObject(String)
+   * @see PApplet#saveJSONObject(JSONObject, String)
+   */
+  public JSONObject parseJSONObject(String input) {
+    return new JSONObject(new StringReader(input));
+  }
+
+
+  /**
+   * @webref input:files
+   * @param filename name of a file in the data folder or a URL
+   * @see JSONObject
+   * @see JSONArray
+   * @see PApplet#loadJSONArray(String)
+   * @see PApplet#saveJSONObject(JSONObject, String)
+   * @see PApplet#saveJSONArray(JSONArray, String)
+   */
+  public JSONObject loadJSONObject(String filename) {
+    return new JSONObject(createReader(filename));
+  }
+
+
+  static public JSONObject loadJSONObject(File file) {
+    return new JSONObject(createReader(file));
+  }
+
+
+  /**
+   * @webref output:files
+   * @see JSONObject
+   * @see JSONArray
+   * @see PApplet#loadJSONObject(String)
+   * @see PApplet#loadJSONArray(String)
+   * @see PApplet#saveJSONArray(JSONArray, String)
+   */
+  public boolean saveJSONObject(JSONObject json, String filename) {
+    return saveJSONObject(json, filename, null);
+  }
+
+
+  /**
+   * @nowebref
+   */
+  public boolean saveJSONObject(JSONObject json, String filename, String options) {
+    return json.save(saveFile(filename), options);
+  }
+
+
+  /**
+   * @webref input:files
+   * @param input String to parse as a JSONArray
+   * @see JSONObject
+   * @see PApplet#loadJSONObject(String)
+   * @see PApplet#saveJSONObject(JSONObject, String)
+   */
+  public JSONArray parseJSONArray(String input) {
+    return new JSONArray(new StringReader(input));
+  }
+
+
+  /**
+   * @webref input:files
+   * @param filename name of a file in the data folder or a URL
+   * @see JSONArray
+   * @see PApplet#loadJSONObject(String)
+   * @see PApplet#saveJSONObject(JSONObject, String)
+   * @see PApplet#saveJSONArray(JSONArray, String)
+   */
+  public JSONArray loadJSONArray(String filename) {
+    return new JSONArray(createReader(filename));
+  }
+
+
+  static public JSONArray loadJSONArray(File file) {
+    return new JSONArray(createReader(file));
+  }
+
+
+  /**
+   * @webref output:files
+   * @see JSONObject
+   * @see JSONArray
+   * @see PApplet#loadJSONObject(String)
+   * @see PApplet#loadJSONArray(String)
+   * @see PApplet#saveJSONObject(JSONObject, String)
+   */
+  public boolean saveJSONArray(JSONArray json, String filename) {
+    return saveJSONArray(json, filename, null);
+  }
+
+
+  public boolean saveJSONArray(JSONArray json, String filename, String options) {
+    return json.save(saveFile(filename), options);
   }
 
 
@@ -4336,7 +4345,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
     Typeface baseFont = null;
 
     if (lowerName.endsWith(".otf") || lowerName.endsWith(".ttf")) {
-      AssetManager assets = getBaseContext().getAssets();
+      AssetManager assets = surface.getAssets();
       baseFont = Typeface.createFromAsset(assets, name);
     } else {
       baseFont = (Typeface) PFont.findNative(name);
@@ -4489,6 +4498,156 @@ public class PApplet extends Activity implements PConstants, Runnable {
 //  }
 
 
+  //////////////////////////////////////////////////////////////
+
+  // LISTING DIRECTORIES
+
+
+  public String[] listPaths(String path, String... options) {
+    File[] list = listFiles(path, options);
+
+    int offset = 0;
+    for (String opt : options) {
+      if (opt.equals("relative")) {
+        if (!path.endsWith(File.pathSeparator)) {
+          path += File.pathSeparator;
+        }
+        offset = path.length();
+        break;
+      }
+    }
+    String[] outgoing = new String[list.length];
+    for (int i = 0; i < list.length; i++) {
+      // as of Java 1.8, substring(0) returns the original object
+      outgoing[i] = list[i].getAbsolutePath().substring(offset);
+    }
+    return outgoing;
+  }
+
+
+  public File[] listFiles(String path, String... options) {
+    File file = new File(path);
+    // if not an absolute path, make it relative to the sketch folder
+    if (!file.isAbsolute()) {
+      file = sketchFile(path);
+    }
+    return listFiles(file, options);
+  }
+
+
+  // "relative" -> no effect with the Files version, but important for listPaths
+  // "recursive"
+  // "extension=js" or "extensions=js|csv|txt" (no dot)
+  // "directories" -> only directories
+  // "files" -> only files
+  // "hidden" -> include hidden files (prefixed with .) disabled by default
+  static public File[] listFiles(File base, String... options) {
+    boolean recursive = false;
+    String[] extensions = null;
+    boolean directories = true;
+    boolean files = true;
+    boolean hidden = false;
+
+    for (String opt : options) {
+      if (opt.equals("recursive")) {
+        recursive = true;
+      } else if (opt.startsWith("extension=")) {
+        extensions = new String[] { opt.substring(10) };
+      } else if (opt.startsWith("extensions=")) {
+        extensions = split(opt.substring(10), ',');
+      } else if (opt.equals("files")) {
+        directories = false;
+      } else if (opt.equals("directories")) {
+        files = false;
+      } else if (opt.equals("hidden")) {
+        hidden = true;
+      } else if (opt.equals("relative")) {
+        // ignored
+      } else {
+        throw new RuntimeException(opt + " is not a listFiles() option");
+      }
+    }
+
+    if (extensions != null) {
+      for (int i = 0; i < extensions.length; i++) {
+        extensions[i] = "." + extensions[i];
+      }
+    }
+
+    if (!files && !directories) {
+      // just make "only files" and "only directories" mean... both
+      files = true;
+      directories = true;
+    }
+
+    if (!base.canRead()) {
+      return null;
+    }
+
+    List<File> outgoing = new ArrayList<>();
+    listFilesImpl(base, recursive, extensions, hidden, directories, files, outgoing);
+    return outgoing.toArray(new File[0]);
+  }
+
+
+  static void listFilesImpl(File folder, boolean recursive,
+                            String[] extensions, boolean hidden,
+                            boolean directories, boolean files,
+                            List<File> list) {
+    File[] items = folder.listFiles();
+    if (items != null) {
+      for (File item : items) {
+        String name = item.getName();
+        if (!hidden && name.charAt(0) == '.') {
+          continue;
+        }
+        if (item.isDirectory()) {
+          if (recursive) {
+            listFilesImpl(item, recursive, extensions, hidden, directories, files, list);
+          }
+          if (directories) {
+            list.add(item);
+          }
+        } else if (files) {
+          if (extensions == null) {
+            list.add(item);
+          } else {
+            for (String ext : extensions) {
+              if (item.getName().toLowerCase().endsWith(ext)) {
+                list.add(item);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+
+
+  //////////////////////////////////////////////////////////////
+
+  // EXTENSIONS
+
+
+  /**
+   * Get the compression-free extension for this filename.
+   * @param filename The filename to check
+   * @return an extension, skipping past .gz if it's present
+   */
+  static public String checkExtension(String filename) {
+    // Don't consider the .gz as part of the name, createInput()
+    // and createOuput() will take care of fixing that up.
+    if (filename.toLowerCase().endsWith(".gz")) {
+      filename = filename.substring(0, filename.length() - 3);
+    }
+    int dotIndex = filename.lastIndexOf('.');
+    if (dotIndex != -1) {
+      return filename.substring(dotIndex + 1).toLowerCase();
+    }
+    return null;
+  }
+
 
   //////////////////////////////////////////////////////////////
 
@@ -4548,10 +4707,8 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * following lines any more I'm gonna send Sun my medical bills.
    */
   static public BufferedReader createReader(InputStream input) {
-    InputStreamReader isr = null;
-    try {
-      isr = new InputStreamReader(input, "UTF-8");
-    } catch (UnsupportedEncodingException e) { }  // not gonna happen
+    InputStreamReader isr =
+      new InputStreamReader(input, StandardCharsets.UTF_8);
     return new BufferedReader(isr);
   }
 
@@ -4594,12 +4751,10 @@ public class PApplet extends Activity implements PConstants, Runnable {
    * It's the JavaSoft API engineers who need to explain themselves.
    */
   static public PrintWriter createWriter(OutputStream output) {
-    try {
-      BufferedOutputStream bos = new BufferedOutputStream(output, 8192);
-      OutputStreamWriter osw = new OutputStreamWriter(bos, "UTF-8");
-      return new PrintWriter(osw);
-    } catch (UnsupportedEncodingException e) { }  // not gonna happen
-    return null;
+    BufferedOutputStream bos = new BufferedOutputStream(output, 8192);
+    OutputStreamWriter osw =
+      new OutputStreamWriter(bos, StandardCharsets.UTF_8);
+    return new PrintWriter(osw);
   }
 
 
@@ -4679,12 +4834,19 @@ public class PApplet extends Activity implements PConstants, Runnable {
 //      URL url = new URL(filename);
 //      stream = url.openStream();
 //      return stream;
-        HttpGet httpRequest = null;
-        httpRequest = new HttpGet(URI.create(filename));
-        HttpClient httpclient = new DefaultHttpClient();
-        HttpResponse response = (HttpResponse) httpclient.execute(httpRequest);
-        HttpEntity entity = response.getEntity();
-        return entity.getContent();
+    	URL url = new URL(filename);
+    	HttpURLConnection con = (HttpURLConnection) url.openConnection();
+    	con.setRequestMethod("GET");
+    	con.setDoInput(true);
+    	con.connect();
+    	return con.getInputStream();
+    	//The following code is deprecaded by Android
+//        HttpGet httpRequest = null;
+//        httpRequest = new HttpGet(URI.create(filename));
+//        HttpClient httpclient = new DefaultHttpClient();
+//        HttpResponse response = (HttpResponse) httpclient.execute(httpRequest);
+//        HttpEntity entity = response.getEntity();
+//        return entity.getContent();
         // can't use BufferedHttpEntity because it may try to allocate a byte
         // buffer of the size of the download, bad when DL is 25 MB... [0200]
 //        BufferedHttpEntity bufHttpEntity = new BufferedHttpEntity(entity);
@@ -4773,7 +4935,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
      */
 
     // Try the assets folder
-    AssetManager assets = getAssets();
+    AssetManager assets = surface.getAssets();
     try {
       stream = assets.open(filename);
       if (stream != null) {
@@ -4811,19 +4973,18 @@ public class PApplet extends Activity implements PConstants, Runnable {
     }
 
     // Attempt to load the file more directly. Doesn't like paths.
-    Context context = getApplicationContext();
-    try {
-      // MODE_PRIVATE is default, should we use something else?
-      stream = context.openFileInput(filename);
-      if (stream != null) {
-        return stream;
-      }
-    } catch (FileNotFoundException e) {
-      // ignore this and move on
-      //e.printStackTrace();
-    }
+//    try {
+//      // MODE_PRIVATE is default, should we use something else?
+//      stream = surface.openFileInput(filename);
+//      if (stream != null) {
+//        return stream;
+//      }
+//    } catch (FileNotFoundException e) {
+//      // ignore this and move on
+//      //e.printStackTrace();
+//    }
 
-    return null;
+    return surface.openFileInput(filename);
   }
 
 
@@ -5225,8 +5386,7 @@ public class PApplet extends Activity implements PConstants, Runnable {
       if (new File(where).isAbsolute()) return where;
     } catch (Exception e) { }
 
-    Context context = getApplicationContext();
-    return context.getFileStreamPath(where).getAbsolutePath();
+    return surface.getFileStreamPath(where).getAbsolutePath();
   }
 
 
@@ -7730,25 +7890,6 @@ public class PApplet extends Activity implements PConstants, Runnable {
   }
 
 
-  private void tellPDE(final String message) {
-    Log.i(getComponentName().getPackageName(), "PROCESSING " + message);
-  }
-
-
-  @Override
-  protected void onStart() {
-    tellPDE("onStart");
-    super.onStart();
-  }
-
-
-  @Override
-  protected void onStop() {
-    tellPDE("onStop");
-    super.onStop();
-  }
-
-
   //////////////////////////////////////////////////////////////
 
   // everything below this line is automatically generated. no touch.
@@ -7889,6 +8030,36 @@ public class PApplet extends Activity implements PConstants, Runnable {
   }
 
 
+  public void attribPosition(String name, float x, float y, float z) {
+    g.attribPosition(name, x, y, z);
+  }
+
+
+  public void attribNormal(String name, float nx, float ny, float nz) {
+    g.attribNormal(name, nx, ny, nz);
+  }
+
+
+  public void attribColor(String name, int color) {
+    g.attribColor(name, color);
+  }
+
+
+  public void attrib(String name, float... values) {
+    g.attrib(name, values);
+  }
+
+
+  public void attrib(String name, int... values) {
+    g.attrib(name, values);
+  }
+
+
+  public void attrib(String name, boolean... values) {
+    g.attrib(name, values);
+  }
+
+
   /**
    * Set texture mode to either to use coordinates based on the IMAGE
    * (more intuitive for new users) or NORMALIZED (better for advanced chaps)
@@ -8000,11 +8171,12 @@ public class PApplet extends Activity implements PConstants, Runnable {
   }
 
 
-  public PShape createShape(PShape source) {
-    return g.createShape(source);
-  }
-
-
+  /**
+   * @webref shape
+   * @see PShape
+   * @see PShape#endShape()
+   * @see PApplet#loadShape(String)
+   */
   public PShape createShape() {
     return g.createShape();
   }
@@ -8015,6 +8187,10 @@ public class PApplet extends Activity implements PConstants, Runnable {
   }
 
 
+  /**
+   * @param kind either POINT, LINE, TRIANGLE, QUAD, RECT, ELLIPSE, ARC, BOX, SPHERE
+   * @param p parameters that match the kind of shape
+   */
   public PShape createShape(int kind, float... p) {
     return g.createShape(kind, p);
   }
@@ -8378,28 +8554,6 @@ public class PApplet extends Activity implements PConstants, Runnable {
                     float x3, float y3, float z3,
                     float x4, float y4, float z4) {
     g.curve(x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4);
-  }
-
-
-  /**
-   * If true in PImage, use bilinear interpolation for copy()
-   * operations. When inherited by PGraphics, also controls shapes.
-   */
-  public void smooth() {
-    g.smooth();
-  }
-
-
-  public void smooth(int level) {
-    g.smooth(level);
-  }
-
-
-  /**
-   * Disable smoothing. See smooth().
-   */
-  public void noSmooth() {
-    g.noSmooth();
   }
 
 
@@ -9515,6 +9669,11 @@ public class PApplet extends Activity implements PConstants, Runnable {
    */
   public Object getNative() {
     return g.getNative();
+  }
+
+
+  public void setNative(Object nativeObject) {
+    g.setNative(nativeObject);
   }
 
 

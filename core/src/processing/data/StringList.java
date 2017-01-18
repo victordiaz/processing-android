@@ -1,3 +1,25 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+  Part of the Processing project - http://processing.org
+
+  Copyright (c) 2013-16 The Processing Foundation
+
+  This library is free software; you can redistribute it and/or
+  modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation, version 2.
+
+  This library is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty
+  of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  See the GNU Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General
+  Public License along with this library; if not, write to the
+  Free Software Foundation, Inc., 59 Temple Place, Suite 330,
+  Boston, MA  02111-1307  USA
+*/
+
 package processing.data;
 
 import java.util.Arrays;
@@ -41,6 +63,27 @@ public class StringList implements Iterable<String> {
     count = list.length;
     data = new String[count];
     System.arraycopy(list, 0, data, 0, count);
+  }
+
+
+  /**
+   * Construct a StringList from a random pile of objects. Null values will
+   * stay null, but all the others will be converted to String values.
+   */
+  public StringList(Object... items) {
+    count = items.length;
+    data = new String[count];
+    int index = 0;
+    for (Object o : items) {
+//      // Not gonna go with null values staying that way because perhaps
+//      // the most common case here is to immediately call join() or similar.
+//      data[index++] = String.valueOf(o);
+      // Keep null values null (because join() will make non-null anyway)
+      if (o != null) {  // leave null values null
+        data[index] = o.toString();
+      }
+      index++;
+    }
   }
 
 
@@ -113,6 +156,9 @@ public class StringList implements Iterable<String> {
    * @brief Get an entry at a particular index
    */
   public String get(int index) {
+    if (index >= count) {
+      throw new ArrayIndexOutOfBoundsException(index);
+    }
     return data[index];
   }
 
@@ -134,6 +180,22 @@ public class StringList implements Iterable<String> {
       count = index+1;
     }
     data[index] = what;
+  }
+
+
+  /** Just an alias for append(), but matches pop() */
+  public void push(String value) {
+    append(value);
+  }
+
+
+  public String pop() {
+    if (count == 0) {
+      throw new RuntimeException("Can't call pop() on an empty list");
+    }
+    String value = get(count-1);
+    data[--count] = null;  // avoid leak
+    return value;
   }
 
 
@@ -274,6 +336,14 @@ public class StringList implements Iterable<String> {
   }
 
 
+  /** Add this value, but only if it's not already in the list. */
+  public void appendUnique(String value) {
+    if (!hasValue(value)) {
+      append(value);
+    }
+  }
+
+
 //  public void insert(int index, int value) {
 //    if (index+1 > count) {
 //      if (index+1 < data.length) {
@@ -304,12 +374,17 @@ public class StringList implements Iterable<String> {
 //  }
 
 
+  public void insert(int index, String value) {
+    insert(index, new String[] { value });
+  }
+
+
   // same as splice
   public void insert(int index, String[] values) {
     if (index < 0) {
       throw new IllegalArgumentException("insert() index cannot be negative: it was " + index);
     }
-    if (index >= values.length) {
+    if (index >= data.length) {
       throw new IllegalArgumentException("insert() index " + index + " is past the end of this list");
     }
 
@@ -495,7 +570,7 @@ public class StringList implements Iterable<String> {
 
   /**
    * @webref stringlist:method
-   * @brief To come...
+   * @brief Reverse the order of the list elements
    */
   public void reverse() {
     int ii = count - 1;
@@ -592,6 +667,7 @@ public class StringList implements Iterable<String> {
   }
 
 
+  @Override
   public Iterator<String> iterator() {
 //    return valueIterator();
 //  }
@@ -603,6 +679,7 @@ public class StringList implements Iterable<String> {
 
       public void remove() {
         StringList.this.remove(index);
+        index--;
       }
 
       public String next() {
@@ -629,7 +706,8 @@ public class StringList implements Iterable<String> {
 
 
   /**
-   * Copy as many values as possible into the specified array.
+   * Copy values into the specified array. If the specified array is null or
+   * not the same size, a new array will be allocated.
    * @param array
    */
   public String[] array(String[] array) {
@@ -679,14 +757,6 @@ public class StringList implements Iterable<String> {
   }
 
 
-//  public void println() {
-//    for (int i = 0; i < count; i++) {
-//      System.out.println("[" + i + "] " + data[i]);
-//    }
-//    System.out.flush();
-//  }
-
-
   public String join(String separator) {
     if (count == 0) {
       return "";
@@ -701,23 +771,27 @@ public class StringList implements Iterable<String> {
   }
 
 
-//  static public StringList split(String value, char delim) {
-//    String[] array = PApplet.split(value, delim);
-//    return new StringList(array);
-//  }
+  public void print() {
+    for (int i = 0; i < count; i++) {
+      System.out.format("[%d] %s%n", i, data[i]);
+    }
+  }
+
+
+  /**
+   * Return this dictionary as a String in JSON format.
+   */
+  public String toJSON() {
+    StringList temp = new StringList();
+    for (String item : this) {
+      temp.append(JSONObject.quote(item));
+    }
+    return "[ " + temp.join(", ") + " ]";
+  }
 
 
   @Override
   public String toString() {
-    StringBuilder sb = new StringBuilder();
-    sb.append(getClass().getSimpleName() + " size=" + size() + " [ ");
-    for (int i = 0; i < size(); i++) {
-      if (i != 0) {
-        sb.append(", ");
-      }
-      sb.append(i + ": \"" + data[i] + "\"");
-    }
-    sb.append(" ]");
-    return sb.toString();
+    return getClass().getSimpleName() + " size=" + size() + " " + toJSON();
   }
 }

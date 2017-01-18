@@ -1,7 +1,27 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+ Part of the Processing project - http://processing.org
+
+ Copyright (c) 2013-16 The Processing Foundation
+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License version 2
+ as published by the Free Software Foundation.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software Foundation,
+ Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+
 package processing.mode.android;
 
-import processing.app.Base;
-import processing.app.Editor;
+import processing.app.Messages;
 import processing.app.Platform;
 import processing.app.Preferences;
 import processing.app.exec.ProcessHelper;
@@ -10,41 +30,61 @@ import processing.core.PApplet;
 
 import javax.swing.*;
 import java.awt.*;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 
+
 class AndroidSDK {
+  public static boolean adbDisabled = false;
+  
   private final File folder;
   private final File tools;
+  private final File platforms;
+  private final File targetPlatform;
+  private final File androidJar;
   private final File platformTools;
   private final File androidTool;
 
+  static final String DOWNLOAD_URL ="https://developer.android.com/studio/index.html#downloads";
+  
   private static final String ANDROID_SDK_PRIMARY =
     "Is the Android SDK installed?";
 
   private static final String ANDROID_SDK_SECONDARY =
-    "The Android SDK does not appear to be installed, <br>" +
-    "because the ANDROID_SDK variable is not set. <br>" +
-    "If it is installed, click “Locate SDK path” to select the <br>" +
-    "location of the SDK, or “Download SDK” to let <br>" +
-    "Processing download SDK automatically.<br><br>" +
-    "If you want to download SDK manually, you can visit <br>"+
-    "download site at http://developer.android.com/sdk.";
+      "The Android SDK does not appear to be installed, <br>" +
+      "because the ANDROID_SDK variable is not set. <br>" +
+      "If it is installed, click “Locate SDK path” to select the <br>" +
+      "location of the SDK, or “Download SDK” to let <br>" +
+      "Processing download the SDK automatically.<br><br>" +
+      "If you want to download the SDK manually, you can get <br>"+
+      "the command line tools from <a href=\"" + DOWNLOAD_URL + "\">here</a>. Make sure to install<br>" +
+      "the SDK platform for API " + AndroidBuild.target_sdk + ".";
+    
+  private static final String ANDROID_SYS_IMAGE_PRIMARY =
+      "Download emulator?";
 
+  private static final String ANDROID_SYS_IMAGE_SECONDARY =
+      "The emulator does not appear to be installed, <br>" +
+      "Do you want Processing to download and install it now? <br>" +
+      "Otherwise, you will need to do it through SDK manager.";
+
+  private static final String ANDROID_SYS_IMAGE_WEAR_PRIMARY =
+      "Download watch emulator?";
+
+  private static final String ANDROID_SYS_IMAGE_WEAR_SECONDARY =
+      "The watch emulator does not appear to be installed, <br>" +
+      "Do you want Processing to download and install it now? <br>" +
+      "Otherwise, you will need to do it through SDK manager.";    
+    
   private static final String SELECT_ANDROID_SDK_FOLDER =
     "Choose the location of the Android SDK";
-
-  private static final String NOT_ANDROID_SDK =
-    "The selected folder does not appear to contain an Android SDK,\n" +
-    "or the SDK needs to be updated to the latest version.";
-
-  private static final String ANDROID_SDK_URL =
-    "http://developer.android.com/sdk/";
-
 
   public AndroidSDK(File folder) throws BadSDKException, IOException {
     this.folder = folder;
@@ -62,23 +102,37 @@ class AndroidSDK {
       throw new BadSDKException("There is no platform-tools folder in " + folder);
     }
 
+    platforms = new File(folder, "platforms");
+    if (!platforms.exists()) {
+      throw new BadSDKException("There is no platforms folder in " + folder);
+    }
+    
+    targetPlatform = new File(platforms, AndroidBuild.target_platform);
+    if (!targetPlatform.exists()) {
+      throw new BadSDKException("There is no Android " + 
+                                AndroidBuild.target_sdk + " in " + platforms.getAbsolutePath());
+    }
+
+    androidJar = new File(targetPlatform, "android.jar");
+    if (!androidJar.exists()) {
+      throw new BadSDKException("android.jar for plaform " + 
+                                AndroidBuild.target_sdk + " is missing from " + targetPlatform.getAbsolutePath());
+    }
+    
     androidTool = findAndroidTool(tools);
 
-    final Platform p = Base.getPlatform();
+    String path = Platform.getenv("PATH");
 
-    String path = p.getenv("PATH");
-
-    p.setenv("ANDROID_SDK", folder.getCanonicalPath());
+    Platform.setenv("ANDROID_SDK", folder.getCanonicalPath());
     path = platformTools.getCanonicalPath() + File.pathSeparator +
       tools.getCanonicalPath() + File.pathSeparator + path;
 
     String javaHomeProp = System.getProperty("java.home");
     File javaHome = new File(javaHomeProp).getCanonicalFile();
-    p.setenv("JAVA_HOME", javaHome.getCanonicalPath());
+    Platform.setenv("JAVA_HOME", javaHome.getCanonicalPath());
 
     path = new File(javaHome, "bin").getCanonicalPath() + File.pathSeparator + path;
-
-    p.setenv("PATH", path);
+    Platform.setenv("PATH", path);
 
     checkDebugCertificate();
   }
@@ -154,13 +208,11 @@ class AndroidSDK {
   }
 
 
-  /*
-  public File getToolsFolder() {
-    return tools;
+  public File getAndroidJarPath() {
+    return androidJar;  
   }
-  */
-
-
+  
+  
   public File getPlatformToolsFolder() {
     return platformTools;
   }
@@ -199,11 +251,9 @@ class AndroidSDK {
    * @throws BadSDKException
    * @throws IOException
    */
-  public static AndroidSDK load() throws BadSDKException, IOException {
-    final Platform platform = Base.getPlatform();
-
+  public static AndroidSDK load() throws IOException {
     // The environment variable is king. The preferences.txt entry is a page.
-    final String sdkEnvPath = platform.getenv("ANDROID_SDK");
+    final String sdkEnvPath = Platform.getenv("ANDROID_SDK");
     if (sdkEnvPath != null) {
       try {
         final AndroidSDK androidSDK = new AndroidSDK(new File(sdkEnvPath));
@@ -235,46 +285,67 @@ class AndroidSDK {
 
 
   static public AndroidSDK locate(final Frame window, final AndroidMode androidMode)
-      throws BadSDKException, IOException {
+      throws BadSDKException, CancelException, IOException {
     final int result = showLocateDialog(window);
-    if (result == JOptionPane.CANCEL_OPTION) {
-      throw new BadSDKException("User canceled attempt to find SDK.");
-    }
     if (result == JOptionPane.YES_OPTION) {
-      // here we are going to download sdk automatically
-      //Base.openURL(ANDROID_SDK_URL);
-      //throw new BadSDKException("No SDK installed.");
-
-      return download(androidMode);
-    }
-    while (true) {
-      // TODO this is really a yucky way to do this stuff. fix it.
+      return download(window, androidMode);
+    } else if (result == JOptionPane.NO_OPTION) {
+      // user will manually select folder containing SDK folder
       File folder = selectFolder(SELECT_ANDROID_SDK_FOLDER, null, window);
       if (folder == null) {
-        throw new BadSDKException("User canceled attempt to find SDK.");
-      }
-      try {
+        throw new CancelException("User canceled attempt to find SDK"); 
+      } else {
         final AndroidSDK androidSDK = new AndroidSDK(folder);
         Preferences.set("android.sdk.path", folder.getAbsolutePath());
         return androidSDK;
-
-      } catch (final BadSDKException nope) {
-        JOptionPane.showMessageDialog(window, NOT_ANDROID_SDK);
       }
+    } else {
+      throw new CancelException("User canceled attempt to find SDK"); 
+    }
+  }
+  
+  static public boolean locateSysImage(final Frame window, 
+      final AndroidMode androidMode, boolean wear)
+      throws BadSDKException, CancelException, IOException {
+    final int result = showDownloadSysImageDialog(window, wear);
+    if (result == JOptionPane.YES_OPTION) {
+      return downloadSysImage(window, androidMode, wear);
+    } else if (result == JOptionPane.NO_OPTION) {
+      return false;
+    } else {
+      return false; 
     }
   }
 
-  static public AndroidSDK download(final AndroidMode androidMode) throws BadSDKException {
-    AndroidMode.sdkDownloadInProgress = true;
-
-    SwingUtilities.invokeLater(new Runnable() {
-      @Override
-      public void run() {
-        SDKDownloader downloader = new SDKDownloader(androidMode);
-        downloader.startDownload();
-      }
-    });
-    return null;
+  static public AndroidSDK download(final Frame editor, final AndroidMode androidMode) 
+      throws BadSDKException, CancelException {
+    final SDKDownloader downloader = new SDKDownloader(editor, androidMode);    
+    downloader.run(); // This call blocks until the SDK download complete, or user cancels.
+    
+    if (downloader.cancelled()) {
+      throw new CancelException("User canceled SDK download");  
+    } 
+    AndroidSDK sdk = downloader.getSDK();
+    if (sdk == null) {
+      throw new BadSDKException("SDK could not be downloaded");
+    }
+    return sdk;
+  }
+  
+  static public boolean downloadSysImage(final Frame editor, 
+      final AndroidMode androidMode, final boolean wear) 
+      throws BadSDKException, CancelException {
+    final SysImageDownloader downloader = new SysImageDownloader(editor, androidMode, wear);    
+    downloader.run(); // This call blocks until the SDK download complete, or user cancels.
+    
+    if (downloader.cancelled()) {
+      throw new CancelException("User canceled emulator download");  
+    } 
+    boolean res = downloader.getResult();
+    if (!res) {
+      throw new BadSDKException("Emulator could not be downloaded");
+    }
+    return res;
   }
 
   static public int showLocateDialog(Frame editor) {
@@ -299,6 +370,8 @@ class AndroidSDK {
     pane.setInitialValue(options[0]);
 
     JDialog dialog = pane.createDialog(editor, null);
+    dialog.setTitle("");
+    dialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);  
     dialog.setVisible(true);
 
     Object result = pane.getValue();
@@ -310,11 +383,48 @@ class AndroidSDK {
       return JOptionPane.CLOSED_OPTION;
     }
   }
+  
+  
+  static public int showDownloadSysImageDialog(Frame editor, boolean wear) {
+    String msg1 = wear ? ANDROID_SYS_IMAGE_WEAR_PRIMARY : ANDROID_SYS_IMAGE_PRIMARY;
+    String msg2 = wear ? ANDROID_SYS_IMAGE_WEAR_SECONDARY : ANDROID_SYS_IMAGE_SECONDARY;
+    
+    JOptionPane pane =
+        new JOptionPane("<html> " +
+            "<head> <style type=\"text/css\">"+
+            "b { font: 13pt \"Lucida Grande\" }"+
+            "p { font: 11pt \"Lucida Grande\"; margin-top: 8px; width: 300px }"+
+            "</style> </head>" +
+            "<b>" + msg1 + "</b>" +
+            "<p>" + msg2 + "</p>",
+            JOptionPane.QUESTION_MESSAGE);
+
+    String[] options = new String[] { "Yes", "No" };
+    pane.setOptions(options);
+
+    // highlight the safest option ala apple hig
+    pane.setInitialValue(options[0]);
+
+    JDialog dialog = pane.createDialog(editor, null);
+    dialog.setTitle("");
+    dialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);  
+    dialog.setVisible(true);
+
+    Object result = pane.getValue();
+    if (result == options[0]) {
+      return JOptionPane.YES_OPTION;
+    } else if (result == options[1]) {
+      return JOptionPane.NO_OPTION;
+    } else {
+      return JOptionPane.CLOSED_OPTION;
+    }
+  }
+  
 
   // this was banished from Base because it encourages bad practice.
   // TODO figure out a better way to handle the above.
   static public File selectFolder(String prompt, File folder, Frame frame) {
-    if (Base.isMacOS()) {
+    if (Platform.isMacOS()) {
       if (frame == null) frame = new Frame(); //.pack();
       FileDialog fd = new FileDialog(frame, prompt, FileDialog.LOAD);
       if (folder != null) {
@@ -322,6 +432,7 @@ class AndroidSDK {
         //fd.setFile(folder.getName());
       }
       System.setProperty("apple.awt.fileDialogForDirectories", "true");
+      fd.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);  
       fd.setVisible(true);
       System.setProperty("apple.awt.fileDialogForDirectories", "false");
       if (fd.getFile() == null) {
@@ -348,9 +459,14 @@ class AndroidSDK {
 
   private static final String ADB_DAEMON_MSG_1 = "daemon not running";
   private static final String ADB_DAEMON_MSG_2 = "daemon started successfully";
-
+    
   public static ProcessResult runADB(final String... cmd)
-  throws InterruptedException, IOException {
+    throws InterruptedException, IOException {
+    
+    if (adbDisabled) {
+      throw new IOException("adb is currently disabled");
+    }
+        
     final String[] adbCmd;
     if (!cmd[0].equals("adb")) {
       adbCmd = PApplet.splice(cmd, "adb", 0);
@@ -361,28 +477,85 @@ class AndroidSDK {
     if (processing.app.Base.DEBUG) {
       PApplet.printArray(adbCmd);
     }
-//    try {
-    ProcessResult adbResult = new ProcessHelper(adbCmd).execute();
-    // Ignore messages about starting up an adb daemon
-    String out = adbResult.getStdout();
-    if (out.contains(ADB_DAEMON_MSG_1) && out.contains(ADB_DAEMON_MSG_2)) {
-      StringBuilder sb = new StringBuilder();
-      for (String line : out.split("\n")) {
-        if (!out.contains(ADB_DAEMON_MSG_1) &&
-            !out.contains(ADB_DAEMON_MSG_2)) {
-          sb.append(line).append("\n");
+    try {
+      ProcessResult adbResult = new ProcessHelper(adbCmd).execute();
+      // Ignore messages about starting up an adb daemon
+      String out = adbResult.getStdout();
+      if (out.contains(ADB_DAEMON_MSG_1) && out.contains(ADB_DAEMON_MSG_2)) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : out.split("\n")) {
+          if (!out.contains(ADB_DAEMON_MSG_1) &&
+              !out.contains(ADB_DAEMON_MSG_2)) {
+            sb.append(line).append("\n");
+          }
+        }
+        return new ProcessResult(adbResult.getCmd(),
+                                 adbResult.getResult(),
+                                 sb.toString(),
+                                 adbResult.getStderr(),
+                                 adbResult.getTime());
+      }
+      return adbResult;
+    } catch (IOException ioe) {
+      if (-1 < ioe.getMessage().indexOf("Permission denied")) {
+        Messages.showWarning("Trouble with adb!",
+            "Could not run the adb tool from the Android SDK.\n" +
+            "One possibility is that its executable permission\n" +
+            "is not properly set. You can try setting this\n" +
+            "permission manually, or re-installing the SDK.\n\n" +
+            "The mode will be disabled until this problem is fixed.\n");
+        adbDisabled = true;
+      }
+      throw ioe;
+    }
+  }
+
+  static class SDKTarget {
+    public int version = 0;
+    public String name;
+  }
+
+  public ArrayList<SDKTarget> getAvailableSdkTargets() throws IOException {
+    ArrayList<SDKTarget> targets = new ArrayList<SDKTarget>();
+
+    for(File platform : platforms.listFiles()) {
+      File propFile = new File(platform, "build.prop");
+      if (!propFile.exists()) continue;
+
+      SDKTarget target = new SDKTarget();
+
+      BufferedReader br = new BufferedReader(new FileReader(propFile));
+      String line;
+      while ((line = br.readLine()) != null) {
+        String[] lineData = line.split("=");
+        if (lineData[0].equals("ro.build.version.sdk")) {
+          target.version = Integer.valueOf(lineData[1]);
+        }
+
+        if (lineData[0].equals("ro.build.version.release")) {
+          target.name = lineData[1];
+          break;
         }
       }
-      return new ProcessResult(adbResult.getCmd(),
-                               adbResult.getResult(),
-                               sb.toString(),
-                               adbResult.getStderr(),
-                               adbResult.getTime());
+      br.close();
+
+      if (target.version != 0 && target.name != null) targets.add(target);
     }
-    return adbResult;
-//    } catch (IOException ioe) {
-//      ioe.printStackTrace();
-//      throw ioe;
-//    }
+
+    return targets;
   }
+  
+  @SuppressWarnings("serial")
+  static public class BadSDKException extends Exception {
+    public BadSDKException(final String message) {
+      super(message);
+    }
+  }
+  
+  @SuppressWarnings("serial")
+  static public class CancelException extends Exception {
+    public CancelException(final String message) {
+      super(message);
+    }
+  }    
 }

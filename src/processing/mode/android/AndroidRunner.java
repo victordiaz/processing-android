@@ -3,7 +3,8 @@
 /*
  Part of the Processing project - http://processing.org
 
- Copyright (c) 2011 Ben Fry and Casey Reas
+ Copyright (c) 2012-16 The Processing Foundation
+ Copyright (c) 2011-12 Ben Fry and Casey Reas
 
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License version 2
@@ -21,12 +22,14 @@
 
 package processing.mode.android;
 
+import java.io.PrintStream;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import processing.app.ui.Editor;
 import processing.app.RunnerListener;
 import processing.app.SketchException;
 import processing.mode.java.runner.Runner;
@@ -35,15 +38,27 @@ import processing.mode.java.runner.Runner;
 public class AndroidRunner implements DeviceListener {
   AndroidBuild build;
   RunnerListener listener;
-  
-  
+
+  protected PrintStream sketchErr;
+  protected PrintStream sketchOut;
+
+
   public AndroidRunner(AndroidBuild build, RunnerListener listener) {
     this.build = build;
     this.listener = listener;
+
+    if (listener instanceof Editor) {
+      Editor editor = (Editor) listener;
+      sketchErr = editor.getConsole().getErr();
+      sketchOut = editor.getConsole().getOut();
+    } else {
+      sketchErr = System.err;
+      sketchOut = System.out;
+    }
   }
-  
-  
-  public void launch(Future<Device> deviceFuture) {
+
+
+  public void launch(Future<Device> deviceFuture, boolean wear) {
 //    try {
 //      runSketchOnDevice(Devices.getInstance().getEmulator(), "debug", AndroidEditor.this);
 //    } catch (final MonitorCanceled ok) {
@@ -56,13 +71,23 @@ public class AndroidRunner implements DeviceListener {
     final Device device = waitForDevice(deviceFuture, listener);
     if (device == null || !device.isAlive()) {
       listener.statusError("Lost connection with device while launching. Try again.");
-      // Reset the server, in case that's the problem. Sometimes when 
+      // Reset the server, in case that's the problem. Sometimes when
       // launching the emulator times out, the device list refuses to update.
       Devices.killAdbServer();
       return;
     }
+    
+//    if (wear && !device.hasFeature("watch")) {
+//      Messages.showWarning("Device is not a watch!", 
+//                           "Processing built your sketch as a watch face, but\n" +
+//                           "you selected a non-watch device to install it on.\n" +
+//                           "Please select a watch device instead.");      
+//      listener.statusError("Trying to install a watch face on a non-watch device. Select correct device.");
+//      return;
+//    }
 
     device.addListener(this);
+    device.setPackageName(build.getPackageName());
 
 //  if (listener.isHalted()) {
 ////  if (monitor.isCanceled()) {
@@ -72,12 +97,12 @@ public class AndroidRunner implements DeviceListener {
 //  monitor.setNote("Installing sketch on " + device.getId());
     listener.statusNotice("Installing sketch on " + device.getId());
     // this stopped working with Android SDK tools revision 17
-    if (!device.installApp(build.getPathForAPK(), listener)) {
+    if (!device.installApp(build, listener)) {
       listener.statusError("Lost connection with device while installing. Try again.");
       Devices.killAdbServer();  // see above
       return;
     }
-//    if (!build.antInstall()) {      
+//    if (!build.antInstall()) {
 //    }
 
 //  if (monitor.isCanceled()) {
@@ -101,8 +126,8 @@ public class AndroidRunner implements DeviceListener {
 //listener.stopIndeterminate();
 //}
   }
-  
-  
+
+
   private volatile Device lastRunDevice = null;
 
   /**
@@ -118,7 +143,7 @@ public class AndroidRunner implements DeviceListener {
 //                                       "Building and launching...",
 //                                       "Creating project...");
 
-    
+
     AndroidBuild build = new AndroidBuild(sketch, listener);
     try {
       try {
@@ -193,15 +218,14 @@ public class AndroidRunner implements DeviceListener {
   }
   */
 
-  
+
   // if user asks for 480x320, 320x480, 854x480 etc, then launch like that
   // though would need to query the emulator to see if it can do that
 
   private boolean startSketch(AndroidBuild build, final Device device) {
     final String packageName = build.getPackageName();
-    final String className = build.getSketchClassName();
     try {
-      if (device.launchApp(packageName, className)) {
+      if (device.launchApp(packageName)) {
         return true;
       }
     } catch (final Exception e) {
@@ -234,8 +258,8 @@ public class AndroidRunner implements DeviceListener {
                          "on waiting for that device to show up.");
     return null;
   }
-  
-  
+
+
   private static final Pattern LOCATION =
     Pattern.compile("\\(([^:]+):(\\d+)\\)");
   private static final Pattern EXCEPTION_PARSER =
@@ -263,7 +287,7 @@ public class AndroidRunner implements DeviceListener {
 //    if (Runner.handleCommonErrors(exceptionClass, exceptionLine, listener)) {
 //      return;
 //    }
-    Runner.handleCommonErrors(exceptionClass, exceptionLine, listener);
+    Runner.handleCommonErrors(exceptionClass, exceptionLine, listener, sketchErr);
 
     while (frames.hasNext()) {
       final String line = frames.next();
@@ -290,7 +314,7 @@ public class AndroidRunner implements DeviceListener {
   }
 
 
-  // sketch stopped on the device 
+  // sketch stopped on the device
   public void sketchStopped() {
     listener.stopIndeterminate();
     listener.statusHalt();

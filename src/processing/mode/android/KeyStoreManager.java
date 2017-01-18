@@ -1,7 +1,29 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+ Part of the Processing project - http://processing.org
+
+ Copyright (c) 2014-16 The Processing Foundation
+ 
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License version 2
+ as published by the Free Software Foundation.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software Foundation,
+ Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+*/
+
 package processing.mode.android;
 
-import processing.app.Base;
-import processing.app.Preferences;
+import processing.app.Messages;
+import processing.app.Platform;
+import processing.app.ui.Toolkit;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -61,7 +83,7 @@ public class KeyStoreManager extends JFrame {
     JPanel buttons = new JPanel();
     buttons.setAlignmentX(LEFT_ALIGNMENT);
     JButton okButton = new JButton("OK");
-    Dimension dim = new Dimension(Preferences.BUTTON_WIDTH,
+    Dimension dim = new Dimension(Toolkit.getButtonWidth(),
         okButton.getPreferredSize().height);
     okButton.setPreferredSize(dim);
     okButton.addActionListener(new ActionListener() {
@@ -97,13 +119,13 @@ public class KeyStoreManager extends JFrame {
     cancelButton.setEnabled(true);
 
     JButton resetKeystoreButton = new JButton("Reset password");
-    dim = new Dimension(Preferences.BUTTON_WIDTH*2,
+    dim = new Dimension(Toolkit.getButtonWidth()*2,
         okButton.getPreferredSize().height);
     resetKeystoreButton.setPreferredSize(dim);
     resetKeystoreButton.addActionListener(new ActionListener() {
       public void actionPerformed(ActionEvent e) {
         setVisible(false);
-        int result = Base.showYesNoQuestion(editor, "Android keystore",
+        int result = Messages.showYesNoQuestion(editor, "Android keystore",
             "Are you sure you want to reset the password?", "<html><body>We will have to reset the keystore to do this, " +
             "which means you won't be able to upload an update for your app signed with the new keystore to Google Play.<br/><br/>" +
             "We will make a backup for the old keystore.</body></html>");
@@ -112,7 +134,7 @@ public class KeyStoreManager extends JFrame {
           setVisible(true);
         } else {
           if (!AndroidKeyStore.resetKeyStore()) {
-            Base.showWarning("Android keystore", "Failed to remove keystore");
+            Messages.showWarning("Android keystore", "Failed to remove keystore");
             setVisible(true);
           } else {
             keyStore = null;
@@ -124,7 +146,7 @@ public class KeyStoreManager extends JFrame {
     resetKeystoreButton.setEnabled(true);
 
     // think different, biznatchios!
-    if (Base.isMacOS()) {
+    if (Platform.isMacOS()) {
       buttons.add(cancelButton);
 
       if (keyStore != null) buttons.add(resetKeystoreButton);
@@ -147,17 +169,17 @@ public class KeyStoreManager extends JFrame {
         setVisible(false);
       }
     };
-    processing.app.Toolkit.registerWindowCloseKeys(root, disposer);
-    processing.app.Toolkit.setIcon(this);
+    Toolkit.registerWindowCloseKeys(root, disposer);
+    Toolkit.setIcon(this);
 
     pack();
-
-    Dimension screen = processing.app.Toolkit.getScreenSize();
+    /*
+    Dimension screen = Toolkit.getScreenSize();
     Dimension windowSize = getSize();
-
     setLocation((screen.width - windowSize.width) / 2,
         (screen.height - windowSize.height) / 2);
-
+     */
+    setLocationRelativeTo(null);
     setVisible(true);
   }
 
@@ -180,11 +202,11 @@ public class KeyStoreManager extends JFrame {
       if (Arrays.equals(passwordField.getPassword(), repeatPasswordField.getPassword())) {
         return true;
       } else {
-        Base.showWarning("Passwords", "Keystore passwords do not match");
+        Messages.showWarning("Passwords", "Keystore passwords do not match");
         return false;
       }
     } else {
-      Base.showWarning("Passwords", "Keystore password should be at least 6 characters long");
+      Messages.showWarning("Passwords", "Keystore password should be at least 6 characters long");
       return false;
     }
   }
@@ -201,7 +223,7 @@ public class KeyStoreManager extends JFrame {
     textarea.setPreferredSize(new Dimension(400, 100));
     textarea.addMouseListener(new MouseAdapter() {
       public void mouseClicked(MouseEvent e) {
-        Base.openURL(GUIDE_URL);
+        Platform.openURL(GUIDE_URL);
       }
     });
     textarea.setAlignmentX(LEFT_ALIGNMENT);

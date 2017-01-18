@@ -3,7 +3,8 @@
 /*
   Part of the Processing project - http://processing.org
 
-  Copyright (c) 2006-10 Ben Fry and Casey Reas
+  Copyright (c) 2012-16 The Processing Foundation
+  Copyright (c) 2006-12 Ben Fry and Casey Reas
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -23,6 +24,7 @@
 package processing.core;
 
 import java.util.HashMap;
+import java.util.Map;
 
 import processing.core.PApplet;
 
@@ -78,11 +80,11 @@ import processing.core.PApplet;
  */
 public class PShape implements PConstants {
   protected String name;
-  protected HashMap<String,PShape> nameTable;
+  protected Map<String,PShape> nameTable;
 
 //  /** Generic, only draws its child objects. */
 //  static public final int GROUP = 0;
-  // GROUP now inherited from PConstants
+  // GROUP now inherited from PConstants, and is still zero
   /** A line, ellipse, arc, image, etc. */
   static public final int PRIMITIVE = 1;
   /** A series of vertex, curveVertex, and bezierVertex calls. */
@@ -107,6 +109,15 @@ public class PShape implements PConstants {
 
   public static final String INSIDE_BEGIN_END_ERROR =
     "%1$s can only be called outside beginShape() and endShape()";
+
+  public static final String NO_SUCH_VERTEX_ERROR =
+    "%1$s vertex index does not exist";
+
+  static public final String NO_VERTICES_ERROR =
+    "getVertexCount() only works with PATH or GEOMETRY shapes";
+
+  public static final String NOT_A_SIMPLE_VERTEX =
+    "%1$s can not be called on quadratic or bezier vertices";
 
   // boundary box of this shape
   //protected float x;
@@ -139,6 +150,8 @@ public class PShape implements PConstants {
   public float height;
 
   public float depth;
+
+  PGraphics g;
 
   // set to false if the object is hidden in the layers palette
   protected boolean visible = true;
@@ -227,6 +240,9 @@ public class PShape implements PConstants {
   /** True if contains 3D data */
   protected boolean is3D = false;
 
+  protected boolean perVertexStyles = false;
+
+
   // should this be called vertices (consistent with PGraphics internals)
   // or does that hurt flexibility?
 
@@ -262,15 +278,96 @@ public class PShape implements PConstants {
 //  public float px;
 //  public float py;
 
+
+  /**
+   * @nowebref
+   */
   public PShape() {
     this.family = GROUP;
   }
 
 
-/**
- * @nowebref
- */
+  /**
+   * @nowebref
+   */
   public PShape(int family) {
+    this.family = family;
+  }
+
+
+  /**
+   * @nowebref
+   */
+  public PShape(PGraphics g, int family) {
+    this.g = g;
+    this.family = family;
+
+    // Style parameters are retrieved from the current values in the renderer.
+    textureMode = g.textureMode;
+
+    colorMode(g.colorMode,
+              g.colorModeX, g.colorModeY, g.colorModeZ, g.colorModeA);
+
+    // Initial values for fill, stroke and tint colors are also imported from
+    // the renderer. This is particular relevant for primitive shapes, since is
+    // not possible to set their color separately when creating them, and their
+    // input vertices are actually generated at rendering time, by which the
+    // color configuration of the renderer might have changed.
+    fill = g.fill;
+    fillColor = g.fillColor;
+
+    stroke = g.stroke;
+    strokeColor = g.strokeColor;
+    strokeWeight = g.strokeWeight;
+    strokeCap = g.strokeCap;
+    strokeJoin = g.strokeJoin;
+
+    tint = g.tint;
+    tintColor = g.tintColor;
+
+    setAmbient = g.setAmbient;
+    ambientColor = g.ambientColor;
+    specularColor = g.specularColor;
+    emissiveColor = g.emissiveColor;
+    shininess = g.shininess;
+
+    sphereDetailU = g.sphereDetailU;
+    sphereDetailV = g.sphereDetailV;
+
+//    bezierDetail = pg.bezierDetail;
+//    curveDetail = pg.curveDetail;
+//    curveTightness = pg.curveTightness;
+
+    // The rect and ellipse modes are set to CORNER since it is the expected
+    // mode for svg shapes.
+    rectMode = CORNER;
+    ellipseMode = CORNER;
+
+//    normalX = normalY = 0;
+//    normalZ = 1;
+//
+//    normalMode = NORMAL_MODE_AUTO;
+
+    // To make sure that the first vertex is marked as a break.
+    // Same behavior as in the immediate mode.
+//    breakShape = false;
+
+    if (family == GROUP) {
+      // GROUP shapes are always marked as ended.
+//      shapeCreated = true;
+      // TODO why was this commented out?
+    }
+  }
+
+
+  public PShape(PGraphics g, int kind, float... params) {
+    this(g, PRIMITIVE);
+    setKind(kind);
+    setParams(params);
+  }
+
+
+  public void setFamily(int family) {
     this.family = family;
   }
 
@@ -467,7 +564,7 @@ public class PShape implements PConstants {
   }
 
 
-  public void is3D(boolean val) {
+  public void set3D(boolean val) {
     is3D = val;
   }
 
@@ -514,9 +611,11 @@ public class PShape implements PConstants {
     image = null;
   }
 
+
   // TODO unapproved
   protected void solid(boolean solid) {
   }
+
 
   /**
    * @webref shape:vertex
@@ -544,7 +643,9 @@ public class PShape implements PConstants {
 
 
   protected void beginContourImpl() {
-    if (vertexCodes.length == vertexCodeCount) {
+    if (vertexCodes == null) {
+      vertexCodes = new int[10];
+    } else if (vertexCodes.length == vertexCodeCount) {
       vertexCodes = PApplet.expand(vertexCodes);
     }
     vertexCodes[vertexCodeCount++] = BREAK;
@@ -609,6 +710,8 @@ public class PShape implements PConstants {
 
 
   public void vertex(float x, float y, float z) {
+    // why not?
+    vertex(x, y);
   }
 
 
@@ -620,6 +723,34 @@ public class PShape implements PConstants {
   }
 
 
+  public void attribPosition(String name, float x, float y, float z) {
+  }
+
+  public void attribNormal(String name, float nx, float ny, float nz) {
+  }
+
+
+  public void attribColor(String name, int color) {
+  }
+
+
+  public void attrib(String name, float... values) {
+  }
+
+
+  public void attrib(String name, int... values) {
+  }
+
+
+  public void attrib(String name, boolean... values) {
+  }
+
+
+  /**
+   * @webref pshape:method
+   * @brief Starts the creation of a new PShape
+   * @see PApplet#endShape()
+   */
   public void beginShape() {
     beginShape(POLYGON);
   }
@@ -630,11 +761,10 @@ public class PShape implements PConstants {
     openShape = true;
   }
 
-
   /**
    * @webref pshape:method
    * @brief Finishes the creation of a new PShape
-   * @see PApplet#createShape()
+   * @see PApplet#beginShape()
    */
   public void endShape() {
     endShape(OPEN);
@@ -652,6 +782,9 @@ public class PShape implements PConstants {
       return;
     }
 
+    close = (mode==CLOSE);
+
+    // this is the state of the shape
     openShape = false;
   }
 
@@ -766,6 +899,11 @@ public class PShape implements PConstants {
     fill = true;
     colorCalc(gray, alpha);
     fillColor = calcColor;
+
+    if (!setAmbient) {
+      ambient(fillColor);
+      setAmbient = false;
+    }
 
     if (!setAmbient) {
       ambientColor = fillColor;
@@ -1152,11 +1290,6 @@ public class PShape implements PConstants {
 
   public void quadraticVertex(float cx, float cy,
                               float x3, float y3) {
-  }
-
-
-  public void quadraticVertex(float cx, float cy, float cz,
-                              float x3, float y3, float z3) {
     if (vertices == null) {
       vertices = new float[10][];
     } else if (vertexCount + 1 >= vertices.length) {
@@ -1180,27 +1313,29 @@ public class PShape implements PConstants {
   }
 
 
+  public void quadraticVertex(float cx, float cy, float cz,
+                              float x3, float y3, float z3) {
+  }
+
+
   ///////////////////////////////////////////////////////////
 
   //
 
   // Catmull-Rom curves
 
-
   public void curveDetail(int detail) {
   }
-
 
   public void curveTightness(float tightness) {
   }
 
-
   public void curveVertex(float x, float y) {
   }
 
-
   public void curveVertex(float x, float y, float z) {
   }
+
 
 
   // . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
@@ -1358,12 +1493,10 @@ public class PShape implements PConstants {
       for (int i = 0; i < src.vertexCount; i++) {
         float[] vert = src.vertices[i];
 
-
-
-        dest.fill((int)(vert[PGraphics.R] * 255) << 24 |
-                  (int)(vert[PGraphics.G] * 255) << 16 |
-                  (int)(vert[PGraphics.B] * 255) <<  8 |
-                  (int)(vert[PGraphics.A] * 255));
+        dest.fill((int)(vert[PGraphics.A] * 255) << 24 |
+                  (int)(vert[PGraphics.R] * 255) << 16 |
+                  (int)(vert[PGraphics.G] * 255) <<  8 |
+                  (int)(vert[PGraphics.B] * 255));
 
      // Do we need to copy these as well?
 //        dest.ambient(vert[PGraphics.AR] * 255, vert[PGraphics.AG] * 255, vert[PGraphics.AB] * 255);
@@ -1465,14 +1598,15 @@ public class PShape implements PConstants {
   /**
    * Draws the SVG document.
    */
-  public void drawImpl(PGraphics g) {
-    //System.out.println("drawing " + family);
+  protected void drawImpl(PGraphics g) {
     if (family == GROUP) {
       drawGroup(g);
     } else if (family == PRIMITIVE) {
       drawPrimitive(g);
     } else if (family == GEOMETRY) {
-      drawGeometry(g);
+      // same as path
+      drawPath(g);
+//      drawGeometry(g);
     } else if (family == PATH) {
       drawPath(g);
     }
@@ -1515,7 +1649,12 @@ public class PShape implements PConstants {
         g.imageMode(CORNER);
         g.image(image, params[0], params[1], params[2], params[3]);
       } else {
-        g.rectMode(CORNER);
+        if(params.length != 5){
+          g.rectMode(CORNER);
+        }
+        else{
+          g.rectMode((int) params[4]);
+        }
         g.rect(params[0], params[1], params[2], params[3]);
       }
 
@@ -1557,7 +1696,7 @@ public class PShape implements PConstants {
         }
       }
     }
-    g.endShape();
+    g.endShape(close ? CLOSE : OPEN);
   }
 
 
@@ -1614,7 +1753,6 @@ public class PShape implements PConstants {
     g.endShape();
   }
   */
-
 
   protected void drawPath(PGraphics g) {
     // Paths might be empty (go figure)
@@ -1725,12 +1863,26 @@ public class PShape implements PConstants {
     return parent;
   }
 
+  /**
+   * @webref
+   * @brief Returns the number of children
+   */
   public int getChildCount() {
     return childCount;
   }
 
 
+  /** Resize the children[] array to be in line with childCount */
+  protected void crop() {
+    // https://github.com/processing/processing/issues/3347
+    if (children.length != childCount) {
+      children = (PShape[]) PApplet.subset(children, 0, childCount);
+    }
+  }
+
+
   public PShape[] getChildren() {
+    crop();
     return children;
   }
 
@@ -1749,6 +1901,7 @@ public class PShape implements PConstants {
    * @see PShape#addChild(PShape)
    */
   public PShape getChild(int index) {
+    crop();
     return children[index];
   }
 
@@ -1963,6 +2116,9 @@ public class PShape implements PConstants {
    * @see PShape#setVertex(int, float, float)
    */
   public int getVertexCount() {
+    if (family == GROUP || family == PRIMITIVE) {
+      PGraphics.showWarning(NO_VERTICES_ERROR);
+    }
     return vertexCount;
   }
 
@@ -1977,6 +2133,7 @@ public class PShape implements PConstants {
   public PVector getVertex(int index) {
     return getVertex(index, null);
   }
+
 
   /**
    * @param vec PVector to assign the data to
@@ -2011,6 +2168,7 @@ public class PShape implements PConstants {
     return vertices[index][Z];
   }
 
+
   /**
    * @webref pshape:method
    * @brief Sets the vertex at the index position
@@ -2030,6 +2188,7 @@ public class PShape implements PConstants {
     vertices[index][Y] = y;
   }
 
+
   /**
    * @param z the z value for the vertex
    */
@@ -2044,6 +2203,7 @@ public class PShape implements PConstants {
     vertices[index][Z] = z;
   }
 
+
   /**
    * @param vec the PVector to define the x, y, z coordinates
    */
@@ -2055,7 +2215,12 @@ public class PShape implements PConstants {
 
     vertices[index][X] = vec.x;
     vertices[index][Y] = vec.y;
-    vertices[index][Z] = vec.z;
+
+    if (vertices[index].length > 2) {
+      vertices[index][Z] = vec.z;
+    } else if (vec.z != 0 && vec.z == vec.z) {
+      throw new IllegalArgumentException("Cannot set a z-coordinate on a 2D shape");
+    }
   }
 
 
@@ -2102,6 +2267,19 @@ public class PShape implements PConstants {
   }
 
 
+
+  public void setAttrib(String name, int index, float... values) {
+  }
+
+
+  public void setAttrib(String name, int index, int... values) {
+  }
+
+
+  public void setAttrib(String name, int index, boolean... values) {
+  }
+
+
   public float getTextureU(int index) {
     return vertices[index][PGraphics.U];
   }
@@ -2117,6 +2295,14 @@ public class PShape implements PConstants {
       PGraphics.showWarning(INSIDE_BEGIN_END_ERROR, "setTextureUV()");
       return;
     }
+
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setTextureUV()");
+      return;
+    }
+
 
     vertices[index][PGraphics.U] = u;
     vertices[index][PGraphics.V] = v;
@@ -2144,6 +2330,13 @@ public class PShape implements PConstants {
 
 
   public int getFill(int index) {
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getFill()");
+      return fillColor;
+    }
+
     if (image == null) {
       int a = (int) (vertices[index][PGraphics.A] * 255);
       int r = (int) (vertices[index][PGraphics.R] * 255);
@@ -2172,8 +2365,12 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setFill(i, fill);
+    this.fillColor = fill;
+
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setFill(i, fill);
+      }
     }
   }
 
@@ -2183,6 +2380,14 @@ public class PShape implements PConstants {
       PGraphics.showWarning(INSIDE_BEGIN_END_ERROR, "setFill()");
       return;
     }
+
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getFill()");
+      return;
+    }
+
 
     if (image == null) {
       vertices[index][PGraphics.A] = ((fill >> 24) & 0xFF) / 255.0f;
@@ -2194,6 +2399,13 @@ public class PShape implements PConstants {
 
 
   public int getTint(int index) {
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getTint()");
+      return this.tintColor;
+    }
+
     if (image != null) {
       int a = (int) (vertices[index][PGraphics.A] * 255);
       int r = (int) (vertices[index][PGraphics.R] * 255);
@@ -2222,8 +2434,12 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setFill(i, fill);
+    tintColor = fill;
+
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setFill(i, fill);
+      }
     }
   }
 
@@ -2231,6 +2447,13 @@ public class PShape implements PConstants {
   public void setTint(int index, int tint) {
     if (openShape) {
       PGraphics.showWarning(INSIDE_BEGIN_END_ERROR, "setTint()");
+      return;
+    }
+
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setTint()");
       return;
     }
 
@@ -2244,6 +2467,13 @@ public class PShape implements PConstants {
 
 
   public int getStroke(int index) {
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getStroke()");
+      return strokeColor;
+    }
+
     int a = (int) (vertices[index][PGraphics.SA] * 255);
     int r = (int) (vertices[index][PGraphics.SR] * 255);
     int g = (int) (vertices[index][PGraphics.SG] * 255);
@@ -2268,8 +2498,11 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setStroke(i, stroke);
+    strokeColor = stroke;
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setStroke(i, stroke);
+      }
     }
   }
 
@@ -2277,6 +2510,13 @@ public class PShape implements PConstants {
   public void setStroke(int index, int stroke) {
     if (openShape) {
       PGraphics.showWarning(INSIDE_BEGIN_END_ERROR, "setStroke()");
+      return;
+    }
+
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setStroke()");
       return;
     }
 
@@ -2288,6 +2528,14 @@ public class PShape implements PConstants {
 
 
   public float getStrokeWeight(int index) {
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getStrokeWeight()");
+      return strokeWeight;
+    }
+
+
     return vertices[index][PGraphics.SW];
   }
 
@@ -2298,8 +2546,12 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setStrokeWeight(i, weight);
+    strokeWeight = weight;
+
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setStrokeWeight(i, weight);
+      }
     }
   }
 
@@ -2307,6 +2559,13 @@ public class PShape implements PConstants {
   public void setStrokeWeight(int index, float weight) {
     if (openShape) {
       PGraphics.showWarning(INSIDE_BEGIN_END_ERROR, "setStrokeWeight()");
+      return;
+    }
+
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setStrokeWeight()");
       return;
     }
 
@@ -2335,6 +2594,14 @@ public class PShape implements PConstants {
 
 
   public int getAmbient(int index) {
+
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getAmbient()");
+      return ambientColor;
+    }
+
     int r = (int) (vertices[index][PGraphics.AR] * 255);
     int g = (int) (vertices[index][PGraphics.AG] * 255);
     int b = (int) (vertices[index][PGraphics.AB] * 255);
@@ -2348,8 +2615,12 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setAmbient(i, ambient);
+    ambientColor = ambient;
+
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setAmbient(i, ambient);
+      }
     }
   }
 
@@ -2360,6 +2631,13 @@ public class PShape implements PConstants {
       return;
     }
 
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setAmbient()");
+      return;
+    }
+
     vertices[index][PGraphics.AR] = ((ambient >> 16) & 0xFF) / 255.0f;
     vertices[index][PGraphics.AG] = ((ambient >>  8) & 0xFF) / 255.0f;
     vertices[index][PGraphics.AB] = ((ambient >>  0) & 0xFF) / 255.0f;
@@ -2367,6 +2645,13 @@ public class PShape implements PConstants {
 
 
   public int getSpecular(int index) {
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getSpecular()");
+      return specularColor;
+    }
+
     int r = (int) (vertices[index][PGraphics.SPR] * 255);
     int g = (int) (vertices[index][PGraphics.SPG] * 255);
     int b = (int) (vertices[index][PGraphics.SPB] * 255);
@@ -2380,8 +2665,12 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setSpecular(i, specular);
+    specularColor = specular;
+
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setSpecular(i, specular);
+      }
     }
   }
 
@@ -2392,6 +2681,13 @@ public class PShape implements PConstants {
       return;
     }
 
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setSpecular()");
+      return;
+    }
+
     vertices[index][PGraphics.SPR] = ((specular >> 16) & 0xFF) / 255.0f;
     vertices[index][PGraphics.SPG] = ((specular >>  8) & 0xFF) / 255.0f;
     vertices[index][PGraphics.SPB] = ((specular >>  0) & 0xFF) / 255.0f;
@@ -2399,6 +2695,13 @@ public class PShape implements PConstants {
 
 
   public int getEmissive(int index) {
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getEmissive()");
+      return emissiveColor;
+    }
+
     int r = (int) (vertices[index][PGraphics.ER] * 255);
     int g = (int) (vertices[index][PGraphics.EG] * 255);
     int b = (int) (vertices[index][PGraphics.EB] * 255);
@@ -2412,8 +2715,12 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setEmissive(i, emissive);
+    emissiveColor = emissive;
+
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setEmissive(i, emissive);
+      }
     }
   }
 
@@ -2424,6 +2731,13 @@ public class PShape implements PConstants {
       return;
     }
 
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setEmissive()");
+      return;
+    }
+
     vertices[index][PGraphics.ER] = ((emissive >> 16) & 0xFF) / 255.0f;
     vertices[index][PGraphics.EG] = ((emissive >>  8) & 0xFF) / 255.0f;
     vertices[index][PGraphics.EB] = ((emissive >>  0) & 0xFF) / 255.0f;
@@ -2431,6 +2745,13 @@ public class PShape implements PConstants {
 
 
   public float getShininess(int index) {
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "getShininess()");
+      return shininess;
+    }
+
     return vertices[index][PGraphics.SHINE];
   }
 
@@ -2441,8 +2762,12 @@ public class PShape implements PConstants {
       return;
     }
 
-    for  (int i = 0; i < vertices.length; i++) {
-      setShininess(i, shine);
+    shininess = shine;
+
+    if (vertices != null) {
+      for  (int i = 0; i < vertices.length; i++) {
+        setShininess(i, shine);
+      }
     }
   }
 
@@ -2452,6 +2777,14 @@ public class PShape implements PConstants {
       PGraphics.showWarning(INSIDE_BEGIN_END_ERROR, "setShininess()");
       return;
     }
+
+    // make sure we allocated the vertices array and that vertex exists
+    if (vertices == null ||
+        index >= vertices.length) {
+      PGraphics.showWarning(NO_SUCH_VERTEX_ERROR + " (" + index + ")", "setShininess()");
+      return;
+    }
+
 
     vertices[index][PGraphics.SHINE] = shine;
   }

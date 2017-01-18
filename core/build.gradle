@@ -1,0 +1,57 @@
+buildscript {
+    repositories {
+        jcenter()
+    }
+    dependencies {
+        classpath group: 'commons-io', name: 'commons-io', version: '2.5'
+        classpath group: 'org.zeroturnaround', name: 'zt-zip', version: '1.9'
+    }
+}
+
+dependencies {
+    compile name: 'android'
+    compile name: 'android-support-v4'
+    compile name: 'wearable-1.4.0'
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/']
+        }
+        resources {
+            srcDirs = ['src/']
+        }        
+    }
+}
+
+jar {    
+    manifest {
+        attributes(
+                "Manifest-Version": "1.0",
+                "Gradle-Version": "$gradle.gradleVersion"
+        )
+    }
+}
+
+clean.doFirst {
+    delete "$core_jar_path"
+}
+
+import groovy.util.AntBuilder
+import java.nio.file.Files
+import static java.nio.file.StandardCopyOption.*;
+
+task dist {
+    doLast {
+        // make copy of jar file as zip
+        Files.copy(file("$buildDir/libs/core.jar").toPath(),
+                   file("$buildDir/libs/android-core.zip").toPath(), REPLACE_EXISTING);
+                   
+        // and copy it to root
+        Files.copy(file("$buildDir/libs/core.jar").toPath(),
+                   file("$core_jar_path").toPath(), REPLACE_EXISTING);                   
+    }
+}
+
+dist.dependsOn build

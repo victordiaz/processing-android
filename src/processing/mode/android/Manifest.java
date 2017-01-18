@@ -3,7 +3,8 @@
 /*
  Part of the Processing project - http://processing.org
 
- Copyright (c) 2010-11 Ben Fry and Casey Reas
+ Copyright (c) 2012-16 The Processing Foundation
+ Copyright (c) 2010-12 Ben Fry and Casey Reas
 
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License version 2
@@ -21,18 +22,19 @@
 
 package processing.mode.android;
 
+import org.xml.sax.SAXException;
+import processing.app.Messages;
+import processing.app.Sketch;
+import processing.core.PApplet;
+import processing.data.XML;
+
+import javax.xml.parsers.ParserConfigurationException;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
-
-import javax.xml.parsers.ParserConfigurationException;
-
-import org.xml.sax.SAXException;
-
-import processing.app.*;
-import processing.core.PApplet;
-import processing.data.XML;
+import java.util.HashMap;
 
 
 public class Manifest {
@@ -42,14 +44,26 @@ public class Manifest {
     "Errors occurred while reading or writing " + MANIFEST_XML + ",\n" +
     "which means lots of things are likely to stop working properly.\n" +
     "To prevent losing any data, it's recommended that you use “Save As”\n" +
-    "to save a separate copy of your sketch, and the restart Processing.";
-  static final String MULTIPLE_ACTIVITIES =
-    "Processing only supports a single Activity in the AndroidManifest.xml\n" +
-    "file. Only the first activity entry will be updated, and you better \n" +
-    "hope that's the right one, smartypants.";
+    "to save a separate copy of your sketch, and then restart Processing.";
+//  static final String MULTIPLE_ACTIVITIES =
+//    "Processing only supports a single Activity in the AndroidManifest.xml\n" +
+//    "file. Only the first activity entry will be updated, and you better \n" +
+//    "hope that's the right one, smartypants.";
 
+  
+  static private final String[] MANIFEST_TEMPLATE = {
+    "FragmentManifest.xml.tmpl",
+    "WallpaperManifest.xml.tmpl",
+    "WatchFaceManifest.xml.tmpl",
+    "CardboardManifest.xml.tmpl",
+  };
+  
 //  private Editor editor;
   private Sketch sketch;
+  
+  private int appComp;
+  
+  private File modeFolder;
 
   // entries we care about from the manifest file
 //  private String packageName;
@@ -63,9 +77,11 @@ public class Manifest {
 //    this.sketch = editor.getSketch();
 //    load();
 //  }
-  public Manifest(Sketch sketch) {
+  public Manifest(Sketch sketch, int appComp, File modeFolder, boolean forceNew) {
     this.sketch = sketch;
-    load();
+    this.appComp = appComp;
+    this.modeFolder = modeFolder;
+    load(forceNew);
   }
 
 
@@ -83,6 +99,18 @@ public class Manifest {
   }
 
 
+  public String getVersionCode() {
+    String code = xml.getString("android:versionCode");
+    return code.length() == 0 ? "1" : code;
+  }
+  
+  
+  public String getVersionName() {
+    String name = xml.getString("android:versionName");
+    return name.length() == 0 ? "1.0" : name;
+  }
+  
+  
   public void setPackageName(String packageName) {
 //    this.packageName = packageName;
     // this is the package attribute in the root <manifest> object
@@ -90,6 +118,14 @@ public class Manifest {
     save();
   }
 
+  public void setSdkTarget(String version) {
+    XML usesSdk = xml.getChild("uses-sdk");
+    if (usesSdk != null) { 
+//      usesSdk.setString("android:minSdkVersion", "15");
+      usesSdk.setString("android:targetSdkVersion", version);
+      save();
+    }    
+  }
 
 //writer.println("  <uses-permission android:name=\"android.permission.INTERNET\" />");
 //writer.println("  <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\" />");
@@ -100,7 +136,9 @@ public class Manifest {
     int count = elements.length;
     String[] names = new String[count];
     for (int i = 0; i < count; i++) {
-      names[i] = elements[i].getString("android:name").substring(PERMISSION_PREFIX.length());
+      String tmp = elements[i].getString("android:name");
+      int idx = tmp.lastIndexOf(".");
+      names[i] = tmp.substring(idx + 1);
     }
     return names;
   }
@@ -109,6 +147,18 @@ public class Manifest {
   public void setPermissions(String[] names) {
     // just remove all the old ones
     for (XML kid : xml.getChildren("uses-permission")) {
+      String name = kid.getString("android:name");
+      // Don't remove required permissions for wallpapers, watchfaces and cardboard.      
+      if (appComp == AndroidBuild.WALLPAPER) {
+      } else if (appComp == AndroidBuild.WATCHFACE) {
+        if (name.equals("android.permission.WAKE_LOCK")) continue;
+      } else if (appComp == AndroidBuild.CARDBOARD) {
+        if (name.equals("android.permission.INTERNET") ||
+            name.equals("android.permission.NFC") ||
+            name.equals("android.permission.VIBRATE") ||
+            name.equals("android.permission.READ_EXTERNAL_STORAGE") ||
+            name.equals("android.permission.WRITE_EXTERNAL_STORAGE")) continue;
+      }      
       xml.removeChild(kid);
     }
     // ...and add the new kids back
@@ -122,7 +172,7 @@ public class Manifest {
     save();
   }
 
-
+/*
   public void setClassName(String className) {
     XML[] kids = xml.getChildren("application/activity");
     if (kids.length != 1) {
@@ -136,55 +186,24 @@ public class Manifest {
       save();
     }
   }
+*/
 
-
-  private void writeBlankManifest(final File file) {
-    final PrintWriter writer = PApplet.createWriter(file);
-    writer.println("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-    writer.println("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" ");
-//    writer.println("          package=\"" + defaultPackageName() + "\" ");
-    writer.println("          package=\"\" ");
-
-    // Tempting to use 'preferExternal' here, but might annoy some users.
-    // 'auto' at least enables it to be moved back and forth
-    // http://developer.android.com/guide/appendix/install-location.html
-//    writer.println("          android:installLocation=\"auto\" ");
-    // Disabling this for now (0190), requires default.properties to use API 8
-
-    // This is just a number (like the Processing 'revision'). It should
-    // increment with each release. Perhaps P5 should do this automatically
-    // with each build or read/write of the manifest file?
-    writer.println("          android:versionCode=\"1\" ");
-    // This is the version number/name seen by users
-    writer.println("          android:versionName=\"1.0\">");
-
-    // for now including this... we're wiring to a particular SDK version anyway...
-    writer.println("  <uses-sdk android:minSdkVersion=\"" + AndroidBuild.sdkVersion + "\" />");
-//    writer.println("  <uses-sdk android:minSdkVersion=\"\" />");  // insert sdk version
-//    writer.println("  <application android:label=\"@string/app_name\"");
-    writer.println("  <application android:label=\"\"");  // insert pretty name
-    writer.println("               android:icon=\"@drawable/icon\"");
-    writer.println("               android:debuggable=\"true\">");
-
-    // turns out label is not required for the activity, so nixing it
-//    writer.println("    <activity android:name=\"\"");  // insert class name prefixed w/ dot
-////    writer.println("              android:label=\"@string/app_name\">");  // pretty name
-//    writer.println("              android:label=\"\">");
-
-    // activity/android:name should be the full name (package + class name) of
-    // the actual activity class. or the package can be replaced by a single
-    // dot as a prefix as an easier shorthand.
-    writer.println("    <activity android:name=\"\">");
-
-    writer.println("      <intent-filter>");
-    writer.println("        <action android:name=\"android.intent.action.MAIN\" />");
-    writer.println("        <category android:name=\"android.intent.category.LAUNCHER\" />");
-    writer.println("      </intent-filter>");
-    writer.println("    </activity>");
-    writer.println("  </application>");
-    writer.println("</manifest>");
-    writer.flush();
-    writer.close();
+  // TODO: needs to be converted into a template file...
+  private void writeBlankManifest(final File xmlFile, final int appComp) {
+    File xmlTemplate = new File(modeFolder, "templates/" + MANIFEST_TEMPLATE[appComp]);
+    
+    HashMap<String, String> replaceMap = new HashMap<String, String>();    
+    if (appComp == AndroidBuild.FRAGMENT) {
+      replaceMap.put("@@min_sdk@@", AndroidBuild.min_sdk_fragment);
+    } else if (appComp == AndroidBuild.WALLPAPER) {
+      replaceMap.put("@@min_sdk@@", AndroidBuild.min_sdk_wallpaper);
+    } else if (appComp == AndroidBuild.WATCHFACE) {
+      replaceMap.put("@@min_sdk@@", AndroidBuild.min_sdk_watchface);
+    } else if (appComp == AndroidBuild.CARDBOARD) {
+      replaceMap.put("@@min_sdk@@", AndroidBuild.min_sdk_cardboard);
+    }
+        
+    AndroidMode.createFileFromTemplate(xmlTemplate, xmlFile, replaceMap);     
   }
 
 
@@ -213,16 +232,25 @@ public class Manifest {
       String label = app.getString("android:label");
       if (label.length() == 0) {
         app.setString("android:label", className);
+      }      
+      
+      if (appComp == AndroidBuild.WALLPAPER || appComp == AndroidBuild.WATCHFACE) {
+        XML serv = app.getChild("service");
+        label = serv.getString("android:label");
+        if (label.length() == 0) {
+          serv.setString("android:label", className);
+        }       
       }
+      
       app.setString("android:debuggable", debug ? "true" : "false");
 
-      XML activity = app.getChild("activity");
+//      XML activity = app.getChild("activity");
       // the '.' prefix is just an alias for the full package name
       // http://developer.android.com/guide/topics/manifest/activity-element.html#name
-      activity.setString("android:name", "." + className);  // this has to be right
+//      activity.setString("android:name", "." + className);  // this has to be right
 
       PrintWriter writer = PApplet.createWriter(file);
-      writer.print(mf.toString());
+      writer.print(mf.format(4));
       writer.flush();
 //    mf.write(writer);
       writer.close();
@@ -233,51 +261,75 @@ public class Manifest {
   }
 
 
-  protected void load() {
-//    Sketch sketch = editor.getSketch();
-//    File manifestFile = new File(sketch.getFolder(), MANIFEST_XML);
-//    XMLElement xml = null;
-    File manifestFile = getManifestFile();
-    if (manifestFile.exists()) {
-      try {
-        xml = new XML(manifestFile);
-      } catch (Exception e) {
-        e.printStackTrace();
-        System.err.println("Problem reading AndroidManifest.xml, creating a new version");
+  protected void load(boolean forceNew) {
+//  Sketch sketch = editor.getSketch();
+//  File manifestFile = new File(sketch.getFolder(), MANIFEST_XML);
+//  XMLElement xml = null;
+  File manifestFile = getManifestFile();
+  if (manifestFile.exists()) {
+    try {
+      xml = new XML(manifestFile);
+    } catch (Exception e) {
+      e.printStackTrace();
+      System.err.println("Problem reading AndroidManifest.xml, creating a new version");
 
-        // remove the old manifest file, rename it with date stamp
-        long lastModified = manifestFile.lastModified();
-        String stamp = AndroidMode.getDateStamp(lastModified);
-        File dest = new File(sketch.getFolder(), MANIFEST_XML + "." + stamp);
-        boolean moved = manifestFile.renameTo(dest);
-        if (!moved) {
-          System.err.println("Could not move/rename " + manifestFile.getAbsolutePath());
-          System.err.println("You'll have to move or remove it before continuing.");
-          return;
-        }
+      // remove the old manifest file, rename it with date stamp
+      long lastModified = manifestFile.lastModified();
+      String stamp = AndroidMode.getDateStamp(lastModified);
+      File dest = new File(sketch.getFolder(), MANIFEST_XML + "." + stamp);
+      boolean moved = manifestFile.renameTo(dest);
+      if (!moved) {
+        System.err.println("Could not move/rename " + manifestFile.getAbsolutePath());
+        System.err.println("You'll have to move or remove it before continuing.");
+        return;
       }
     }
-    if (xml == null) {
-      writeBlankManifest(manifestFile);
-      try {
-        xml = new XML(manifestFile);
-      } catch (FileNotFoundException e) {
-        System.err.println("Could not read " + manifestFile.getAbsolutePath());
-        e.printStackTrace();
-      } catch (IOException e) {
-        e.printStackTrace();
-      } catch (ParserConfigurationException e) {
-        e.printStackTrace();
-      } catch (SAXException e) {
-        e.printStackTrace();
-      }
-    }
-    if (xml == null) {
-      Base.showWarning("Error handling " + MANIFEST_XML, WORLD_OF_HURT_COMING, null);
-    }
-//    return xml;
   }
-
+  
+  String[] permissionNames = null;
+  String pkgName = null;
+  String versionCode = null;
+  String versionName = null;
+  if (xml != null && forceNew) {
+    permissionNames = getPermissions();    
+    pkgName = getPackageName();
+    versionCode = getVersionCode();
+    versionName = getVersionName();
+    xml = null;
+  }
+  
+  if (xml == null) {
+    writeBlankManifest(manifestFile, appComp);
+    try {
+      xml = new XML(manifestFile);
+      if (permissionNames != null) {
+        setPermissions(permissionNames);
+      }
+      if (pkgName != null) {
+        xml.setString("package", pkgName);
+      }
+      if (versionCode != null) {
+        xml.setString("android:versionCode", versionCode);
+      }
+      if (versionName != null) {
+        xml.setString("android:versionName", versionName);
+      }       
+    } catch (FileNotFoundException e) {
+      System.err.println("Could not read " + manifestFile.getAbsolutePath());
+      e.printStackTrace();
+    } catch (IOException e) {
+      e.printStackTrace();
+    } catch (ParserConfigurationException e) {
+      e.printStackTrace();
+    } catch (SAXException e) {
+      e.printStackTrace();
+    }
+  }
+  if (xml == null) {
+    Messages.showWarning("Error handling " + MANIFEST_XML, WORLD_OF_HURT_COMING);
+  }
+//  return xml;
+}
 
   protected void save() {
     save(getManifestFile());
@@ -290,7 +342,7 @@ public class Manifest {
   protected void save(File file) {
     PrintWriter writer = PApplet.createWriter(file);
 //    xml.write(writer);
-    writer.print(xml.toString());
+    writer.print(xml.format(4));
     writer.flush();
     writer.close();
   }

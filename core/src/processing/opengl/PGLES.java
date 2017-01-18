@@ -1,3 +1,27 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+  Part of the Processing project - http://processing.org
+
+  Copyright (c) 2012-16 The Processing Foundation
+  Copyright (c) 2004-12 Ben Fry and Casey Reas
+  Copyright (c) 2001-04 Massachusetts Institute of Technology
+
+  This library is free software; you can redistribute it and/or
+  modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation, version 2.1.
+
+  This library is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General
+  Public License along with this library; if not, write to the
+  Free Software Foundation, Inc., 59 Temple Place, Suite 330,
+  Boston, MA  02111-1307  USA
+*/
+
 package processing.opengl;
 
 import java.nio.Buffer;
@@ -6,17 +30,13 @@ import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 
 import javax.microedition.khronos.egl.EGL10;
-import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.egl.EGLContext;
-import javax.microedition.khronos.egl.EGLDisplay;
 import javax.microedition.khronos.opengles.GL10;
 
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
-import android.opengl.GLSurfaceView.EGLConfigChooser;
-import android.opengl.GLSurfaceView.Renderer;
 import android.opengl.GLU;
-import processing.core.PApplet;
+import android.view.SurfaceView;
 import processing.opengl.tess.PGLU;
 import processing.opengl.tess.PGLUtessellator;
 import processing.opengl.tess.PGLUtessellatorCallbackAdapter;
@@ -33,19 +53,10 @@ public class PGLES extends PGL {
   public PGLU glu;
 
   /** The current opengl context */
-  public static EGLContext context;
+  public EGLContext context;
 
   /** The current surface view */
-  public static GLSurfaceView glview;
-
-  // ........................................................
-
-  // Internal objects
-
-  /** The renderer object driving the rendering loop, analogous to the
-   * GLEventListener in JOGL */
-  protected static AndroidRenderer renderer;
-  protected static AndroidConfigChooser configChooser;
+  public GLSurfaceView glview;
 
   // ........................................................
 
@@ -53,11 +64,12 @@ public class PGLES extends PGL {
   // GLES
 
   static {
+    SINGLE_BUFFERED = true;
+
     MIN_DIRECT_BUFFER_SIZE = 1;
     INDEX_TYPE             = GLES20.GL_UNSIGNED_SHORT;
 
-    SAVE_SURFACE_TO_PIXELS_HACK = false;
-    MIPMAPS_ENABLED     = false;
+    MIPMAPS_ENABLED        = false;
 
     DEFAULT_IN_VERTICES   = 16;
     DEFAULT_IN_EDGES      = 32;
@@ -71,15 +83,18 @@ public class PGLES extends PGL {
     MAX_CAPS_JOINS_LENGTH = 1000;
   }
 
-  public static final boolean ENABLE_MULTISAMPLING = false;
-
   // Some EGL constants needed to initialize a GLES2 context.
-  protected static final int EGL_CONTEXT_CLIENT_VERSION = 0x3098;
-  protected static final int EGL_OPENGL_ES2_BIT         = 0x0004;
+  public static final int EGL_CONTEXT_CLIENT_VERSION = 0x3098;
+  public static final int EGL_OPENGL_ES2_BIT         = 0x0004;
 
   // Coverage multisampling identifiers for nVidia Tegra2
-  protected static final int EGL_COVERAGE_BUFFERS_NV    = 0x30E0;
-  protected static final int EGL_COVERAGE_SAMPLES_NV    = 0x30E1;
+  public static final int EGL_COVERAGE_BUFFERS_NV    = 0x30E0;
+  public static final int EGL_COVERAGE_SAMPLES_NV    = 0x30E1;
+  public static final int GL_COVERAGE_BUFFER_BIT_NV  = 0x8000;
+
+  public static boolean usingMultisampling = false;
+  public static boolean usingCoverageMultisampling = false;
+  public static int multisampleCount = 1;
 
   ///////////////////////////////////////////////////////////
 
@@ -93,26 +108,19 @@ public class PGLES extends PGL {
 
 
   @Override
-  public GLSurfaceView getCanvas() {
+  public GLSurfaceView getNative() {
     return glview;
   }
 
 
   @Override
-  protected void setFps(float fps) { }
-
-
-  @Override
   protected void initSurface(int antialias) {
-    glview = (GLSurfaceView)pg.parent.getSurfaceView();
+    SurfaceView surf = sketch.getSurfaceView();
+    if (surf != null) {
+      glview = (GLSurfaceView)surf;
+    }
     reqNumSamples = qualityToSamples(antialias);
-
     registerListeners();
-
-    fboLayerCreated = false;
-    fboLayerInUse = false;
-    firstFrame = true;
-    setFps = false;
   }
 
 
@@ -124,22 +132,75 @@ public class PGLES extends PGL {
   protected void registerListeners() { }
 
 
+  @Override
+  protected int getDepthBits()  {
+    intBuffer.rewind();
+    getIntegerv(DEPTH_BITS, intBuffer);
+    return intBuffer.get(0);
+  }
+
+
+  @Override
+  protected int getStencilBits()  {
+    intBuffer.rewind();
+    getIntegerv(STENCIL_BITS, intBuffer);
+    return intBuffer.get(0);
+  }
+
+
+  @Override
+  protected int getDefaultDrawBuffer()  {
+    return fboLayerEnabled ? COLOR_ATTACHMENT0 : FRONT;
+  }
+
+
+  @Override
+  protected int getDefaultReadBuffer()  {
+    return fboLayerEnabled ? COLOR_ATTACHMENT0 : FRONT;
+  }
+
+
+  public void init(GL10 igl) {
+    gl = igl;
+    context = ((EGL10)EGLContext.getEGL()).eglGetCurrentContext();
+    glContext = context.hashCode();
+    glThread = Thread.currentThread();
+
+    if (!hasFBOs()) {
+      throw new RuntimeException(PGL.MISSING_FBO_ERROR);
+    }
+    if (!hasShaders()) {
+      throw new RuntimeException(PGL.MISSING_GLSL_ERROR);
+    }
+  }
+
+
   ///////////////////////////////////////////////////////////
 
   // Frame rendering
 
 
   @Override
-  protected void getGL(PGL pgl) {
-    PGLES pgles = (PGLES)pgl;
-    this.gl = pgles.gl;
+  protected float getPixelScale() {
+    return 1;
   }
 
 
   @Override
-  protected boolean canDraw() {
-    return true;
+  protected void getGL(PGL pgl) {
+    PGLES pgles = (PGLES)pgl;
+    this.gl = pgles.gl;
+    setThread(pgles.glThread);
   }
+
+  public void getGL(GL10 igl) {
+    gl = igl;
+    glThread = Thread.currentThread();
+  }
+
+
+  @Override
+  protected boolean canDraw() { return true; }
 
 
   @Override
@@ -147,335 +208,35 @@ public class PGLES extends PGL {
 
 
   @Override
-  protected void requestDraw() {
-    if (pg.initialized && pg.parent.canDraw()) {
-      glview.requestRender();
-    }
-  }
+  protected void requestDraw() { }
 
 
   @Override
   protected void swapBuffers() { }
 
 
-  ///////////////////////////////////////////////////////////
-
-  // Android specific classes (Renderer, ConfigChooser)
-
-
-  public AndroidRenderer getRenderer() {
-    renderer = new AndroidRenderer();
-    return renderer;
+  @Override
+  protected int getGLSLVersion() {
+    return 100;
   }
 
 
-  public AndroidContextFactory getContextFactory() {
-    return new AndroidContextFactory();
-  }
+  @Override
+  protected void initFBOLayer() {
+    if (0 < sketch.frameCount) {
+      IntBuffer buf = allocateDirectIntBuffer(fboWidth * fboHeight);
 
+      if (hasReadBuffer()) readBuffer(BACK);
+      readPixelsImpl(0, 0, fboWidth, fboHeight, RGBA, UNSIGNED_BYTE, buf);
+      bindTexture(TEXTURE_2D, glColorTex.get(frontTex));
+      texSubImage2D(TEXTURE_2D, 0, 0, 0, fboWidth, fboHeight, RGBA, UNSIGNED_BYTE, buf);
 
-  public AndroidConfigChooser getConfigChooser() {
-    configChooser = new AndroidConfigChooser(5, 6, 5, 4, 16, 1);
-    return configChooser;
-  }
+      bindTexture(TEXTURE_2D, glColorTex.get(backTex));
+      texSubImage2D(TEXTURE_2D, 0, 0, 0, fboWidth, fboHeight, RGBA, UNSIGNED_BYTE, buf);
 
-
-  public AndroidConfigChooser getConfigChooser(int r, int g, int b, int a,
-                                               int d, int s) {
-    configChooser = new AndroidConfigChooser(r, g, b, a, d, s);
-    return configChooser;
-  }
-
-
-  protected class AndroidRenderer implements Renderer {
-    public AndroidRenderer() {
+      bindTexture(TEXTURE_2D, 0);
+      bindFramebufferImpl(FRAMEBUFFER, 0);
     }
-
-    public void onDrawFrame(GL10 igl) {
-      gl = igl;
-      glThread = Thread.currentThread();
-      pg.parent.handleDraw();
-    }
-
-    public void onSurfaceChanged(GL10 igl, int iwidth, int iheight) {
-      gl = igl;
-
-      // Here is where we should initialize native libs...
-      // lib.init(iwidth, iheight);
-
-      pg.setSize(iwidth, iheight);
-    }
-
-    public void onSurfaceCreated(GL10 igl, EGLConfig config) {
-      gl = igl;
-      context = ((EGL10)EGLContext.getEGL()).eglGetCurrentContext();
-      glContext = context.hashCode();
-
-      if (!hasFBOs()) {
-        throw new RuntimeException(MISSING_FBO_ERROR);
-      }
-      if (!hasShaders()) {
-        throw new RuntimeException(MISSING_GLSL_ERROR);
-      }
-    }
-  }
-
-
-  protected class AndroidContextFactory implements
-    GLSurfaceView.EGLContextFactory {
-    public EGLContext createContext(EGL10 egl, EGLDisplay display,
-        EGLConfig eglConfig) {
-      int[] attrib_list = { EGL_CONTEXT_CLIENT_VERSION, 2,
-                            EGL10.EGL_NONE };
-      EGLContext context = egl.eglCreateContext(display, eglConfig,
-                                                EGL10.EGL_NO_CONTEXT,
-                                                attrib_list);
-      return context;
-    }
-
-    public void destroyContext(EGL10 egl, EGLDisplay display,
-                               EGLContext context) {
-      egl.eglDestroyContext(display, context);
-    }
-  }
-
-
-  protected class AndroidConfigChooser implements EGLConfigChooser {
-    // Desired size (in bits) for the rgba color, depth and stencil buffers.
-    public int redTarget;
-    public int greenTarget;
-    public int blueTarget;
-    public int alphaTarget;
-    public int depthTarget;
-    public int stencilTarget;
-
-    // Actual rgba color, depth and stencil sizes (in bits) supported by the
-    // device.
-    public int redBits;
-    public int greenBits;
-    public int blueBits;
-    public int alphaBits;
-    public int depthBits;
-    public int stencilBits;
-    public int[] tempValue = new int[1];
-
-    // The attributes we want in the frame buffer configuration for Processing.
-    // For more details on other attributes, see:
-    // http://www.khronos.org/opengles/documentation/opengles1_0/html/eglChooseConfig.html
-    protected int[] configAttribsGL_MSAA = {
-      EGL10.EGL_RED_SIZE, 5,
-      EGL10.EGL_GREEN_SIZE, 6,
-      EGL10.EGL_BLUE_SIZE, 5,
-      EGL10.EGL_ALPHA_SIZE, 4,
-      EGL10.EGL_DEPTH_SIZE, 16,
-      EGL10.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-      EGL10.EGL_SAMPLE_BUFFERS, 1,
-      EGL10.EGL_SAMPLES, 2,
-      EGL10.EGL_NONE };
-
-    protected int[] configAttribsGL_CovMSAA = {
-      EGL10.EGL_RED_SIZE, 5,
-      EGL10.EGL_GREEN_SIZE, 6,
-      EGL10.EGL_BLUE_SIZE, 5,
-      EGL10.EGL_ALPHA_SIZE, 4,
-      EGL10.EGL_DEPTH_SIZE, 16,
-      EGL10.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-      EGL_COVERAGE_BUFFERS_NV, 1,
-      EGL_COVERAGE_SAMPLES_NV, 2,
-      EGL10.EGL_NONE };
-
-    protected int[] configAttribsGL_NoMSAA = {
-      EGL10.EGL_RED_SIZE, 5,
-      EGL10.EGL_GREEN_SIZE, 6,
-      EGL10.EGL_BLUE_SIZE, 5,
-      EGL10.EGL_ALPHA_SIZE, 4,
-      EGL10.EGL_DEPTH_SIZE, 16,
-      EGL10.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-      EGL10.EGL_NONE };
-
-    protected int[] configAttribsGL_Good = {
-      EGL10.EGL_RED_SIZE, 8,
-      EGL10.EGL_GREEN_SIZE, 8,
-      EGL10.EGL_BLUE_SIZE, 8,
-      EGL10.EGL_ALPHA_SIZE, 8,
-      EGL10.EGL_DEPTH_SIZE, 16,
-      EGL10.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-      EGL10.EGL_NONE };
-
-    protected int[] configAttribsGL_TestMSAA = {
-      EGL10.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-      EGL10.EGL_SAMPLE_BUFFERS, 1,
-      EGL10.EGL_SAMPLES, 2,
-      EGL10.EGL_NONE };
-
-    public AndroidConfigChooser(int r, int g, int b, int a, int d, int s) {
-      redTarget = r;
-      greenTarget = g;
-      blueTarget = b;
-      alphaTarget = a;
-      depthTarget = d;
-      stencilTarget = s;
-    }
-
-    public EGLConfig chooseConfig(EGL10 egl, EGLDisplay display) {
-      EGLConfig[] configs = chooseConfigWithAttribs(egl, display, configAttribsGL_MSAA);
-      if (configs == null) {
-        chooseConfigWithAttribs(egl, display, configAttribsGL_CovMSAA);
-        if (configs == null) {
-          chooseConfigWithAttribs(egl, display, configAttribsGL_NoMSAA);
-        }
-      }
-
-      if (configs == null) {
-        throw new IllegalArgumentException("No EGL configs match configSpec");
-      }
-
-      if (PApplet.DEBUG) {
-        for (EGLConfig config : configs) {
-          String configStr = "P3D - selected EGL config : "
-            + printConfig(egl, display, config);
-          System.out.println(configStr);
-        }
-      }
-
-      // Now return the configuration that best matches the target one.
-      return chooseBestConfig(egl, display, configs);
-    }
-
-    public EGLConfig chooseBestConfig(EGL10 egl, EGLDisplay display,
-                                      EGLConfig[] configs) {
-      EGLConfig bestConfig = null;
-      float bestScore = Float.MAX_VALUE;
-
-      for (EGLConfig config : configs) {
-        int gl = findConfigAttrib(egl, display, config,
-                                  EGL10.EGL_RENDERABLE_TYPE, 0);
-        boolean isGLES2 = (gl & EGL_OPENGL_ES2_BIT) != 0;
-        if (isGLES2) {
-          int d = findConfigAttrib(egl, display, config,
-                                   EGL10.EGL_DEPTH_SIZE, 0);
-          int s = findConfigAttrib(egl, display, config,
-                                   EGL10.EGL_STENCIL_SIZE, 0);
-
-          int r = findConfigAttrib(egl, display, config,
-                                   EGL10.EGL_RED_SIZE, 0);
-          int g = findConfigAttrib(egl, display, config,
-                                   EGL10.EGL_GREEN_SIZE, 0);
-          int b = findConfigAttrib(egl, display, config,
-                                   EGL10.EGL_BLUE_SIZE, 0);
-          int a = findConfigAttrib(egl, display, config,
-                                   EGL10.EGL_ALPHA_SIZE, 0);
-
-          float score = 0.20f * PApplet.abs(r - redTarget) +
-                        0.20f * PApplet.abs(g - greenTarget) +
-                        0.20f * PApplet.abs(b - blueTarget) +
-                        0.15f * PApplet.abs(a - alphaTarget) +
-                        0.15f * PApplet.abs(d - depthTarget) +
-                        0.10f * PApplet.abs(s - stencilTarget);
-
-          if (score < bestScore) {
-            // We look for the config closest to the target config.
-            // Closeness is measured by the score function defined above:
-            // we give more weight to the RGB components, followed by the
-            // alpha, depth and finally stencil bits.
-            bestConfig = config;
-            bestScore = score;
-
-            redBits = r;
-            greenBits = g;
-            blueBits = b;
-            alphaBits = a;
-            depthBits = d;
-            stencilBits = s;
-          }
-        }
-      }
-
-      if (PApplet.DEBUG) {
-        String configStr = "P3D - selected EGL config : "
-          + printConfig(egl, display, bestConfig);
-        System.out.println(configStr);
-      }
-      return bestConfig;
-    }
-
-    protected String printConfig(EGL10 egl, EGLDisplay display,
-                                 EGLConfig config) {
-      int r = findConfigAttrib(egl, display, config,
-                               EGL10.EGL_RED_SIZE, 0);
-      int g = findConfigAttrib(egl, display, config,
-                               EGL10.EGL_GREEN_SIZE, 0);
-      int b = findConfigAttrib(egl, display, config,
-                               EGL10.EGL_BLUE_SIZE, 0);
-      int a = findConfigAttrib(egl, display, config,
-                               EGL10.EGL_ALPHA_SIZE, 0);
-      int d = findConfigAttrib(egl, display, config,
-                               EGL10.EGL_DEPTH_SIZE, 0);
-      int s = findConfigAttrib(egl, display, config,
-                               EGL10.EGL_STENCIL_SIZE, 0);
-      int type = findConfigAttrib(egl, display, config,
-                                  EGL10.EGL_RENDERABLE_TYPE, 0);
-      int nat = findConfigAttrib(egl, display, config,
-                                 EGL10.EGL_NATIVE_RENDERABLE, 0);
-      int bufSize = findConfigAttrib(egl, display, config,
-                                     EGL10.EGL_BUFFER_SIZE, 0);
-      int bufSurf = findConfigAttrib(egl, display, config,
-                                     EGL10.EGL_RENDER_BUFFER, 0);
-
-      return String.format("EGLConfig rgba=%d%d%d%d depth=%d stencil=%d",
-                           r,g,b,a,d,s)
-        + " type=" + type
-        + " native=" + nat
-        + " buffer size=" + bufSize
-        + " buffer surface=" + bufSurf +
-        String.format(" caveat=0x%04x",
-                      findConfigAttrib(egl, display, config,
-                                       EGL10.EGL_CONFIG_CAVEAT, 0));
-    }
-
-    protected int findConfigAttrib(EGL10 egl, EGLDisplay display,
-      EGLConfig config, int attribute, int defaultValue) {
-      if (egl.eglGetConfigAttrib(display, config, attribute, tempValue)) {
-        return tempValue[0];
-      }
-      return defaultValue;
-    }
-
-     protected EGLConfig[] chooseConfigWithAttribs(EGL10 egl,
-                                                   EGLDisplay display,
-                                                   int[] configAttribs) {
-       // Get the number of minimally matching EGL configurations
-       int[] configCounts = new int[1];
-       egl.eglChooseConfig(display, configAttribs, null, 0, configCounts);
-
-       int count = configCounts[0];
-
-       if (count <= 0) {
-         //throw new IllegalArgumentException("No EGL configs match configSpec");
-         return null;
-       }
-
-       // Allocate then read the array of minimally matching EGL configs
-       EGLConfig[] configs = new EGLConfig[count];
-       egl.eglChooseConfig(display, configAttribs, configs, count, configCounts);
-       return configs;
-
-       // Get the number of minimally matching EGL configurations
-//     int[] num_config = new int[1];
-//     egl.eglChooseConfig(display, configAttribsGL, null, 0, num_config);
-//
-//     int numConfigs = num_config[0];
-//
-//     if (numConfigs <= 0) {
-//       throw new IllegalArgumentException("No EGL configs match configSpec");
-//     }
-//
-//     // Allocate then read the array of minimally matching EGL configs
-//     EGLConfig[] configs = new EGLConfig[numConfigs];
-//     egl.eglChooseConfig(display, configAttribsGL, configs, numConfigs,
-//         num_config);
-
-     }
   }
 
 
@@ -818,7 +579,6 @@ public class PGLES extends PGL {
     STENCIL_TEST    = GLES20.GL_STENCIL_TEST;
     DEPTH_TEST      = GLES20.GL_DEPTH_TEST;
     DEPTH_WRITEMASK = GLES20.GL_DEPTH_WRITEMASK;
-    ALPHA_TEST      = 0x0BC0;
 
     COLOR_BUFFER_BIT   = GLES20.GL_COLOR_BUFFER_BIT;
     DEPTH_BUFFER_BIT   = GLES20.GL_DEPTH_BUFFER_BIT;
@@ -842,7 +602,7 @@ public class PGLES extends PGL {
     DEPTH_COMPONENT24 = 0x81A6;
     DEPTH_COMPONENT32 = 0x81A7;
 
-    STENCIL_INDEX  = GLES20.GL_STENCIL_INDEX;
+    STENCIL_INDEX  = 6401; // GLES20.GL_STENCIL_INDEX is marked as deprecated
     STENCIL_INDEX1 = 0x8D46;
     STENCIL_INDEX4 = 0x8D47;
     STENCIL_INDEX8 = GLES20.GL_STENCIL_INDEX8;
@@ -873,9 +633,8 @@ public class PGLES extends PGL {
     RENDERBUFFER_STENCIL_SIZE    = GLES20.GL_RENDERBUFFER_STENCIL_SIZE;
     RENDERBUFFER_INTERNAL_FORMAT = GLES20.GL_RENDERBUFFER_INTERNAL_FORMAT;
 
-    MULTISAMPLE    = 0x809D;
-    POINT_SMOOTH   = 0x0B10;
-    LINE_SMOOTH    = 0x0B10;
+    MULTISAMPLE    = -1;
+    LINE_SMOOTH    = -1;
     POLYGON_SMOOTH = -1;
   }
 
@@ -1032,8 +791,15 @@ public class PGLES extends PGL {
 
   @Override
   public void viewport(int x, int y, int w, int h) {
+    float scale = getPixelScale();
+    viewportImpl((int)scale * x, (int)(scale * y), (int)(scale * w), (int)(scale * h));
+  }
+
+  @Override
+  protected void viewportImpl(int x, int y, int w, int h) {
     GLES20.glViewport(x, y, w, h);
   }
+
 
   //////////////////////////////////////////////////////////////////////////////
 
@@ -1043,6 +809,14 @@ public class PGLES extends PGL {
   public void readPixelsImpl(int x, int y, int width, int height, int format, int type, Buffer buffer) {
     GLES20.glReadPixels(x, y, width, height, format, type, buffer);
   }
+
+
+  @Override
+  protected void readPixelsImpl(int x, int y, int width, int height, int format,
+                                int type, long offset) {
+    // TODO Auto-generated method stub
+  }
+
 
   //////////////////////////////////////////////////////////////////////////////
 
@@ -1084,18 +858,13 @@ public class PGLES extends PGL {
   }
 
   @Override
-  public void vertexAttri4fv(int index, FloatBuffer values) {
+  public void vertexAttrib4fv(int index, FloatBuffer values) {
     GLES20.glVertexAttrib4fv(index, values);
   }
 
   @Override
   public void vertexAttribPointer(int index, int size, int type, boolean normalized, int stride, int offset) {
     GLES20.glVertexAttribPointer(index, size, type, normalized, stride, offset);
-  }
-
-  @Override
-  public void vertexAttribPointer(int index, int size, int type, boolean normalized, int stride, Buffer data) {
-    GLES20.glVertexAttribPointer(index, size, type, normalized, stride, data);
   }
 
   @Override
@@ -1109,18 +878,13 @@ public class PGLES extends PGL {
   }
 
   @Override
-  public void drawArrays(int mode, int first, int count) {
+  public void drawArraysImpl(int mode, int first, int count) {
     GLES20.glDrawArrays(mode, first, count);
   }
 
   @Override
-  public void drawElements(int mode, int count, int type, int offset) {
+  public void drawElementsImpl(int mode, int count, int type, int offset) {
     GLES20.glDrawElements(mode, count, type, offset);
-  }
-
-  @Override
-  public void drawElements(int mode, int count, int type, Buffer indices) {
-    GLES20.glDrawElements(mode, count, type, indices);
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -1177,7 +941,7 @@ public class PGLES extends PGL {
 
   @Override
   public void copyTexSubImage2D(int target, int level, int xOffset, int yOffset, int x, int y, int width, int height) {
-    GLES20.glCopyTexSubImage2D(target, level, x, y, xOffset, xOffset, width, height);
+    GLES20.glCopyTexSubImage2D(target, level, x, y, xOffset, yOffset, width, height);
   }
 
   @Override
@@ -1197,7 +961,7 @@ public class PGLES extends PGL {
 
   @Override
   public void texParameterf(int target, int pname, float param) {
-    gl.glTexParameterf(target, pname, param);
+    GLES20.glTexParameterf(target, pname, param);
   }
 
   @Override
@@ -1588,11 +1352,6 @@ public class PGLES extends PGL {
     GLES20.glBlendColor(red, green, blue, alpha);
   }
 
-  @Override
-  public void alphaFunc(int func, float ref) {
-    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glAlphaFunc()"));
-  }
-
   ///////////////////////////////////////////////////////////
 
   // Whole Framebuffer Operations
@@ -1619,6 +1378,9 @@ public class PGLES extends PGL {
 
   @Override
   public void clear(int buf) {
+    if (usingMultisampling && usingCoverageMultisampling) {
+      buf |= GL_COVERAGE_BUFFER_BIT_NV;
+    }
     GLES20.glClear(buf);
   }
 
@@ -1713,21 +1475,83 @@ public class PGLES extends PGL {
 
   @Override
   public void blitFramebuffer(int srcX0, int srcY0, int srcX1, int srcY1, int dstX0, int dstY0, int dstX1, int dstY1, int mask, int filter) {
-    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glBlitFramebuffer()"));
+//    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glBlitFramebuffer()"));
   }
 
   @Override
   public void renderbufferStorageMultisample(int target, int samples, int format, int width, int height) {
-    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glRenderbufferStorageMultisample()"));
+//    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glRenderbufferStorageMultisample()"));
   }
 
   @Override
   public void readBuffer(int buf) {
-    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glReadBuffer()"));
+//    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glReadBuffer()"));
   }
 
   @Override
   public void drawBuffer(int buf) {
-    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glDrawBuffer()"));
+//    throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "glDrawBuffer()"));
   }
+
+
+  @Override
+  protected int getFontAscent(Object font) {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+
+
+  @Override
+  protected int getFontDescent(Object font) {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+
+
+  @Override
+  protected int getTextWidth(Object font, char[] buffer, int start, int stop) {
+    // TODO Auto-generated method stub
+    return 0;
+  }
+
+
+  @Override
+  protected Object getDerivedFont(Object font, float size) {
+    // TODO Auto-generated method stub
+    return null;
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+
+  // Synchronization
+
+  @Override
+  public long fenceSync(int condition, int flags) {
+    return 0;
+//    if (gl3es3 != null) {
+//      return gl3es3.glFenceSync(condition, flags);
+//    } else {
+//      throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "fenceSync()"));
+//    }
+  }
+
+  @Override
+  public void deleteSync(long sync) {
+//    if (gl3es3 != null) {
+//      gl3es3.glDeleteSync(sync);
+//    } else {
+//      throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "deleteSync()"));
+//    }
+  }
+
+  @Override
+  public int clientWaitSync(long sync, int flags, long timeout) {
+    return 0;
+//    if (gl3es3 != null) {
+//      return gl3es3.glClientWaitSync(sync, flags, timeout);
+//    } else {
+//      throw new RuntimeException(String.format(MISSING_GLFUNC_ERROR, "clientWaitSync()"));
+//    }
+  }
+
 }

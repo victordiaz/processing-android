@@ -3,7 +3,8 @@
 /*
   Part of the Processing project - http://processing.org
 
-  Copyright (c) 2004-10 Ben Fry and Casey Reas
+  Copyright (c) 2012-16 The Processing Foundation
+  Copyright (c) 2004-12 Ben Fry and Casey Reas
   Copyright (c) 2001-04 Massachusetts Institute of Technology
 
   This library is free software; you can redistribute it and/or
@@ -422,7 +423,13 @@ public interface PConstants {
   static final int ENABLE_STROKE_PURE         =  9;
   static final int DISABLE_STROKE_PURE        = -9;
 
-  static final int HINT_COUNT                 = 10;
+  static final int ENABLE_BUFFER_READING      =  10;
+  static final int DISABLE_BUFFER_READING     = -10;
+
+  static final int DISABLE_ASYNC_SAVEFRAME    =  11;
+  static final int ENABLE_ASYNC_SAVEFRAME     = -11;
+
+  static final int HINT_COUNT                 =  12;
 
 
   // error messages

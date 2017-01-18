@@ -3,6 +3,7 @@
 /*
   Part of the Processing project - http://processing.org
 
+  Copyright (c) 2012-16 The Processing Foundation
   Copyright (c) 2005-12 Ben Fry and Casey Reas
 
   This library is free software; you can redistribute it and/or
@@ -355,6 +356,18 @@ public final class PMatrix3D implements PMatrix /*, PConstants*/ {
     m10 = r10; m11 = r11; m12 = r12; m13 = r13;
     m20 = r20; m21 = r21; m22 = r22; m23 = r23;
     m30 = r30; m31 = r31; m32 = r32; m33 = r33;
+  }
+
+
+  /**
+   * Apply another matrix to the left of this one.
+   */
+  public void preApply(PMatrix source) {
+    if (source instanceof PMatrix2D) {
+      preApply((PMatrix2D) source);
+    } else if (source instanceof PMatrix3D) {
+      preApply((PMatrix3D) source);
+    }
   }
 
 

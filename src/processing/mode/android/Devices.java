@@ -1,3 +1,24 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+ Part of the Processing project - http://processing.org
+
+ Copyright (c) 2013-16 The Processing Foundation
+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License version 2
+ as published by the Free Software Foundation.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software Foundation,
+ Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+
 package processing.mode.android;
 
 import processing.app.exec.ProcessResult;
@@ -26,6 +47,8 @@ class Devices {
 
   private static final Devices INSTANCE = new Devices();
 
+  private static final String BT_DEBUG_PORT = "4444";
+  
   private Device selectedDevice;
 
   public static Devices getInstance() {
@@ -56,6 +79,17 @@ class Devices {
     }
   }
 
+  public static void enableBlueToothDebugging() {
+    try {
+      // Enable debugging over bluetooth
+      // http://developer.android.com/training/wearables/apps/bt-debugging.html
+      AndroidSDK.runADB("forward", "tcp:" + BT_DEBUG_PORT, "localabstract:/adb-hub");
+      AndroidSDK.runADB("connect", "127.0.0.1:" + BT_DEBUG_PORT);
+    } catch (final Exception e) {
+      e.printStackTrace();
+    }    
+  }
+  
 
   private Devices() {
     if (processing.app.Base.DEBUG) {
@@ -77,34 +111,34 @@ class Devices {
   }
 
 
-  public Future<Device> getEmulator() {
+  public Future<Device> getEmulator(final boolean wear, final boolean gpu) {
     final Callable<Device> androidFinder = new Callable<Device>() {
       public Device call() throws Exception {
-        return blockingGetEmulator();
+        return blockingGetEmulator(wear, gpu);
       }
     };
-    final FutureTask<Device> task =
-      new FutureTask<Device>(androidFinder);
+    final FutureTask<Device> task = new FutureTask<Device>(androidFinder);
     deviceLaunchThread.execute(task);
     return task;
   }
 
 
-  private final Device blockingGetEmulator() {
+  private final Device blockingGetEmulator(final boolean wear, final boolean gpu) {
 //    System.out.println("going looking for emulator");
-    Device emu = find(true);
+    String port = AVD.getPort(wear);
+    Device emu = find(true, port);
     if (emu != null) {
 //      System.out.println("found emu " + emu);
       return emu;
     }
 //    System.out.println("no emu found");
 
-    EmulatorController emuController = EmulatorController.getInstance();
+    EmulatorController emuController = EmulatorController.getInstance(wear);
 //    System.out.println("checking emulator state");
     if (emuController.getState() == State.NOT_RUNNING) {
       try {
 //        System.out.println("not running, gonna launch");
-        emuController.launch(); // this blocks until emulator boots
+        emuController.launch(wear, gpu); // this blocks until emulator boots
 //        System.out.println("not just gonna, we've done the launch");
       } catch (final IOException e) {
         System.err.println("Problem while launching emulator.");
@@ -114,6 +148,7 @@ class Devices {
     } else {
       System.out.println("Emulator is " + emuController.getState() +
                          ", which is not expected.");
+
     }
 //    System.out.println("and now we're out");
 
@@ -127,7 +162,7 @@ class Devices {
                            emuController.getState() + ")");
         return null;
       }
-      emu = find(true);
+      emu = find(true, port);
       if (emu != null) {
         //        System.err.println("AndroidEnvironment: returning " + emu.getId()
         //            + " from loop.");
@@ -144,10 +179,11 @@ class Devices {
   }
 
 
-  private Device find(final boolean wantEmulator) {
+  private Device find(final boolean wantEmulator, final String port) {
     refresh();
     synchronized (devices) {
       for (final Device device : devices.values()) {
+        if (port != null && device.getName().indexOf(port) == -1) continue;
         final boolean isEmulator = device.getId().contains("emulator");
         if ((isEmulator && wantEmulator) || (!isEmulator && !wantEmulator)) {
           return device;
@@ -195,7 +231,7 @@ class Devices {
   }
 
   private final Device blockingGetHardware() {
-    Device hardware = find(false);
+    Device hardware = find(false, null);
     if (hardware != null) {
       return hardware;
     }
@@ -205,7 +241,7 @@ class Devices {
       } catch (final InterruptedException e) {
         return null;
       }
-      hardware = find(false);
+      hardware = find(false, null);
       if (hardware != null) {
         return hardware;
       }
@@ -265,6 +301,10 @@ class Devices {
    * @throws IOException
    */
   public static List<String> list() {
+    if (AndroidSDK.adbDisabled) {
+      return Collections.emptyList();
+    }
+    
     ProcessResult result;
     try {
 //      System.out.println("listing devices 00");
@@ -293,7 +333,7 @@ class Devices {
 
     // might read "List of devices attached"
     final String stdout = result.getStdout();
-    if (!(stdout.startsWith("List of devices") || stdout.trim().length() == 0)) {
+    if (!(stdout.contains("List of devices") || stdout.trim().length() == 0)) {
       System.err.println(ADB_DEVICES_ERROR);
       System.err.println("Output was “" + stdout + "”");
       return Collections.emptyList();

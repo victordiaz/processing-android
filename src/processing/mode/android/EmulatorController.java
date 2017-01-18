@@ -1,3 +1,24 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+ Part of the Processing project - http://processing.org
+
+ Copyright (c) 2013-16 The Processing Foundation
+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License version 2
+ as published by the Free Software Foundation.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software Foundation,
+ Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+
 package processing.mode.android;
 
 import java.io.IOException;
@@ -11,6 +32,9 @@ import processing.core.PApplet;
 
 
 class EmulatorController {
+  public final static String DEFAULT_PORT = "5566";
+  public final static String WEAR_PORT = "5576";
+  
   public static enum State {
     NOT_RUNNING, WAITING_FOR_BOOT, RUNNING
   }
@@ -23,7 +47,7 @@ class EmulatorController {
   }
 
   
-  private void setState(final State state) {
+  public void setState(final State state) {
     if (processing.app.Base.DEBUG) {
       //System.out.println("Emulator state: " + state);
       new Exception("setState(" + state + ") called").printStackTrace(System.out);
@@ -36,27 +60,46 @@ class EmulatorController {
    * Blocks until emulator is running, or some catastrophe happens.
    * @throws IOException
    */
-  synchronized public void launch() throws IOException {
+  synchronized public void launch(boolean wear, boolean gpu) throws IOException {
     if (state != State.NOT_RUNNING) {
       String illegal = "You can't launch an emulator whose state is " + state;
       throw new IllegalStateException(illegal);
     }
 
-    String portString = Preferences.get("android.emulator.port");
-    if (portString == null) {
-      portString = "5566";
-      Preferences.set("android.emulator.port", portString);
+    String portString = null;
+    if (wear) {
+      portString = Preferences.get("android.emulator.wear.port");
+      if (portString == null) {
+        portString = WEAR_PORT;
+        Preferences.set("android.emulator.wear.port", portString);
+      }
+    } else {
+      portString = Preferences.get("android.emulator.default.port");
+      if (portString == null) {
+        portString = DEFAULT_PORT;
+        Preferences.set("android.emulator.default.port", portString);
+      }
     }
 
     // See http://developer.android.com/guide/developing/tools/emulator.html
+    String avdName;
+    if (wear) {
+      avdName = AVD.wearAVD.name;
+    } else {
+      avdName = AVD.defaultAVD.name;
+    }
+    
+    String gpuFlag = gpu ? "on" : "off";
     final String[] cmd = new String[] {
       "emulator",
-      "-avd", AVD.defaultAVD.name,
+      "-avd", avdName,
       "-port", portString,
 //      "-no-boot-anim",  // does this do anything?
       // http://code.google.com/p/processing/issues/detail?id=1059
-//      "-gpu", "on"  // enable OpenGL
+      "-gpu", gpuFlag  // enable OpenGL
     };
+    
+    
     //System.err.println("EmulatorController: Launching emulator");
     if (Base.DEBUG) {
       System.out.println(processing.core.PApplet.join(cmd, " "));
@@ -167,9 +210,14 @@ class EmulatorController {
   
   // whoever called them "design patterns" certainly wasn't a f*king designer.
   
-  public static EmulatorController getInstance() {
-    return INSTANCE;
+  public static EmulatorController getInstance(boolean wear) {
+    if (wear) {
+      return INSTANCE_WEAR;
+    } else {
+      return INSTANCE;
+    }
   }
 
   private static final EmulatorController INSTANCE = new EmulatorController();
+  private static final EmulatorController INSTANCE_WEAR = new EmulatorController();
 }
